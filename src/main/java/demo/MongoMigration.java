@@ -3,9 +3,13 @@ package demo;
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
 import static org.bson.codecs.configuration.CodecRegistries.fromRegistries;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -31,13 +35,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
 public class MongoMigration {
-	private String couchdbURI = "http://127.0.0.1:5984";
-	private String mongodbURI = "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin";
-	private int numThreads = 4;
-	private int couchBatchSize = 1000;
-	private int mongoBatchSize = 100;
-	private String dbName = "demo";
-	private String collectionName = "sample_docs";
+	private static String couchdbURI = "http://127.0.0.1:5984";
+	private static String mongodbURI = "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin";
+	private static int numThreads = 8;
+	private static int couchBatchSize = 10000;
+	private static int mongoBatchSize = 1000;
+	private static String dbName = "demo";
+	private static String collectionName = "sample_docs";
 
 	public void begin() throws MalformedURLException, InterruptedException {
         ConnectionString connectionString = new ConnectionString(mongodbURI);
@@ -90,7 +94,21 @@ public class MongoMigration {
 		}
 	}
 
-	public static void main(String[] args) {
+	public static void main(String[] args) {        
+		try (InputStream input = new FileInputStream("migration.properties")) {
+			Properties prop = new Properties();
+			prop.load(input);
+			couchdbURI = prop.getProperty("couchdb.uri");
+			mongodbURI = prop.getProperty("mongodb.uri");
+			numThreads = Integer.valueOf(prop.getProperty("num_threads"));
+			couchBatchSize = Integer.valueOf(prop.getProperty("couch_batch_size"));
+			mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
+			dbName = prop.getProperty("database_name");
+			collectionName = prop.getProperty("collection_name");
+		} catch (IOException ex) {
+			System.out.println("use default properties");
+		}
+
 		SpringApplication.run(MongoMigration.class, args);
 		MongoMigration migration = new MongoMigration();
 		try {

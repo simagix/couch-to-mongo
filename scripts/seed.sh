@@ -1,5 +1,10 @@
 #! /bin/bash
 db="demo"
+
+if [ "$1" != "" ]; then
+    db=$1
+fi
+
 curl -H 'Content-Type: application/json' \
     -X DELETE http://127.0.0.1:5984/$db
 curl -H 'Content-Type: application/json' \
