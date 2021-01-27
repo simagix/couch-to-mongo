@@ -1,5 +1,6 @@
+// Copyright 2020 Kuei-chun Chen. All rights reserved.
 package demo;
- 
+
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,65 +35,66 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class MongoMigration {
 	private String couchdbURI = "http://127.0.0.1:5984";
 	private String mongodbURI = "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin";
+	private String dbName = "demo";
+	private String collectionName = "sample_docs";
 	private int numThreads = 8;
 	private int couchBatchSize = 10000;
 	private int mongoBatchSize = 1000;
-	private String dbName = "demo";
-	private String collectionName = "sample_docs";
-	private int total = 0;
+	private int fetched = 0;
 	private int inserted = 0;
+	private int offset = 0;
+	private boolean verbose;
 
 	public void execute() throws MalformedURLException, InterruptedException {
-        ConnectionString connectionString = new ConnectionString(mongodbURI);
-        MongoClientSettings clientSettings = MongoClientSettings.builder().applyConnectionString(connectionString).build();
-		try (MongoClient mongoClient = MongoClients.create(clientSettings)) {
-			MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
-			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
-			HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).build();
-			CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
-			CouchDbConnector db = dbInstance.createConnector(dbName, true); 
-			for(;;) {
-				System.out.printf("skipped %d, limited: %d%n", total, couchBatchSize);
-				ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(total);
-				ViewResult list = db.queryView(query);
-				if (list.isEmpty()) {
-					break;
-				}
-				executor.submit(() -> {
-					InsertManyOptions options = new InsertManyOptions();
-					options.ordered(false);
-					List<Document> documents = new ArrayList<>();
-					int i = 0;
-					for (ViewResult.Row row : list.getRows()) {
-						documents.add(Document.parse(row.getDoc()));
-						if ( (++i) % mongoBatchSize == 0) { 
-							InsertManyResult res = collection.insertMany(documents, options);
-							inserted += res.getInsertedIds().size();
-							System.out.printf("%d sent, %d inserted%n", documents.size(), res.getInsertedIds().size());
-							documents = new ArrayList<>();
+		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
+		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).build();
+		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
+		CouchDbConnector db = dbInstance.createConnector(dbName, true);
+
+		ConnectionString connectionString = new ConnectionString(mongodbURI);
+		MongoClientSettings clientSettings = MongoClientSettings.builder().applyConnectionString(connectionString).build();
+		for (int t = 0; t < numThreads; t++) {
+			executor.submit(() -> {
+				long id = Thread.currentThread().getId() % numThreads;
+				try (MongoClient mongoClient = MongoClients.create(clientSettings)) {
+					MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
+
+					for (;;) {
+						int ptr;
+						synchronized (this) {
+							ptr = this.offset;
+							this.offset += couchBatchSize;
 						}
+						println(String.format("[%d] skipped %d, limited: %d%n", id, ptr, couchBatchSize));
+						ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(ptr);
+						ViewResult result = db.queryView(query);
+						if (result.isEmpty()) {
+							println(String.format("[%d] exiting loop%n", id));
+							break;
+						}
+						synchronized (this) {
+							this.fetched += result.getSize();
+							System.out.printf("[%d] total of %d fetched%n", id, this.fetched);
+						}
+
+						processViewResults(result, collection, id);
+						Thread.sleep(100);
 					}
-					if (! documents.isEmpty()) {
-						System.out.printf("documents size %d%n", documents.size());
-						InsertManyResult res = collection.insertMany(documents, options);
-						System.out.printf("%d sent, %d inserted%n", documents.size(), res.getInsertedIds().size());
-						inserted += res.getInsertedIds().size();
-					}
-					Thread.sleep(100);
-					return null;
-				});
-				total += list.getSize();
-			}
-			while (total != inserted) {
-				System.out.printf("total %d, inserted %d%n", total, inserted);
-				Thread.sleep(1000);
-			}
-			executor.shutdown();
-			executor.awaitTermination(5, TimeUnit.SECONDS);
+				}
+				println(String.format("[%d] returning%n", id));
+				return null;
+			});
 		}
+		int count = 0;
+		while(count++ < 10 && this.fetched != this.inserted) {
+			println(String.format("fetched %d, inserted %d%n", this.fetched, this.inserted));
+			Thread.sleep(5000);
+		}
+		executor.shutdown();
+		executor.awaitTermination(5, TimeUnit.SECONDS);
 	}
 
-	public void readProperties(String filename) {    
+	public void readProperties(String filename) {
 		try (InputStream input = new FileInputStream(filename)) {
 			Properties prop = new Properties();
 			prop.load(input);
@@ -103,18 +105,52 @@ public class MongoMigration {
 			mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
 			dbName = prop.getProperty("database_name");
 			collectionName = prop.getProperty("collection_name");
+			verbose = Boolean.valueOf(prop.getProperty("verbose"));
 		} catch (IOException ex) {
-			System.out.println("use default properties");
+			println("use default properties");
 		}
 	}
 
-	public static void main(String[] args) {    
+	private void processViewResults(ViewResult result, MongoCollection<Document> collection, long id) {
+		List<Document> documents = new ArrayList<>();
+		int i = 0;
+		for (ViewResult.Row row : result.getRows()) {
+			documents.add(Document.parse(row.getDoc()));
+			if ((++i) % mongoBatchSize == 0) {
+				saveToMongo(collection,  documents, id);
+				documents = new ArrayList<>();
+			}
+		}
+		saveToMongo(collection, documents, id);
+	}
+
+	private void saveToMongo(MongoCollection<Document> collection, List<Document> documents, long id) {
+		if (documents.isEmpty()) {
+			return;
+		}
+		InsertManyOptions options = new InsertManyOptions();
+		options.ordered(false);
+		println(String.format("documents size %d%n", documents.size()));
+		InsertManyResult res = collection.insertMany(documents, options);
+		synchronized (this) {
+			this.inserted += res.getInsertedIds().size();
+			println(String.format("[%d] %d sent, %d inserted%n", id, documents.size(), res.getInsertedIds().size()));
+		}
+	}
+
+	private void println(String message) {
+		if (this.verbose) {
+			System.out.println(message);
+		}
+	}
+
+	public static void main(String[] args) {
 		SpringApplication.run(MongoMigration.class, args);
 		MongoMigration migration = new MongoMigration();
 		try {
 			migration.readProperties("migration.properties");
 			migration.execute();
-		} catch(Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 		}
 	}
