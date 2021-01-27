@@ -39,6 +39,8 @@ public class MongoMigration {
 	private int mongoBatchSize = 1000;
 	private String dbName = "demo";
 	private String collectionName = "sample_docs";
+	private int total = 0;
+	private int inserted = 0;
 
 	public void execute() throws MalformedURLException, InterruptedException {
         ConnectionString connectionString = new ConnectionString(mongodbURI);
@@ -48,8 +50,7 @@ public class MongoMigration {
 			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
 			HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).build();
 			CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
-			CouchDbConnector db = dbInstance.createConnector(dbName, true);
-			int total = 0;
+			CouchDbConnector db = dbInstance.createConnector(dbName, true); 
 			for(;;) {
 				System.out.printf("skipped %d, limited: %d%n", total, couchBatchSize);
 				ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(total);
@@ -64,22 +65,28 @@ public class MongoMigration {
 					int i = 0;
 					for (ViewResult.Row row : list.getRows()) {
 						documents.add(Document.parse(row.getDoc()));
-						if ( ++i % mongoBatchSize == 0) { 
+						if ( (++i) % mongoBatchSize == 0) { 
 							InsertManyResult res = collection.insertMany(documents, options);
+							inserted += res.getInsertedIds().size();
 							System.out.printf("%d sent, %d inserted%n", documents.size(), res.getInsertedIds().size());
 							documents = new ArrayList<>();
 						}
 					}
 					if (! documents.isEmpty()) {
+						System.out.printf("documents size %d%n", documents.size());
 						InsertManyResult res = collection.insertMany(documents, options);
 						System.out.printf("%d sent, %d inserted%n", documents.size(), res.getInsertedIds().size());
+						inserted += res.getInsertedIds().size();
 					}
 					Thread.sleep(100);
 					return null;
 				});
 				total += list.getSize();
 			}
-	
+			while (total != inserted) {
+				System.out.printf("total %d, inserted %d%n", total, inserted);
+				Thread.sleep(1000);
+			}
 			executor.shutdown();
 			executor.awaitTermination(5, TimeUnit.SECONDS);
 		}
