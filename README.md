@@ -16,4 +16,4 @@ Migrate data from CouchDB to MongoDB.
 mongo --quiet "mongodb://user:password@localhost/demo?replicaSet=replset&authSource=admin" --eval 'db.sample_docs.count()'
 ```
 
-It should return 5000.
+It should return 12500.

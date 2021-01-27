@@ -1,52 +1,68 @@
 package demo;
 
+import org.bson.codecs.pojo.annotations.BsonProperty;
 import org.codehaus.jackson.annotate.JsonIgnoreProperties;
 import org.codehaus.jackson.annotate.JsonProperty;
 
-@JsonIgnoreProperties
+@JsonIgnoreProperties(ignoreUnknown=true)
 public class SampleDoc {
-    private String id;
-    private String revision;
-    private String ts;
-    private int value;
-    
     @JsonProperty("_id")
+    private String id;
+    
+    @JsonProperty("_rev")
+    private String revision;
+
+    @JsonProperty("ts")
+    private String ts;
+
+    @JsonProperty("value")
+    private int value;
+
+    @JsonProperty("Header")
+    private Header header;
+    
+    @BsonProperty("_id")
     public String getId() {
         return id;
     }
 
-    @JsonProperty("_id")
     public void setId(String s) {
         id = s;
     }
 
-    @JsonProperty("_rev")
+    @BsonProperty("_rev")
     public String getRevision() {
         return revision;
     }
 
-    @JsonProperty("_rev")
     public void setRevision(String s) {
         revision = s;
     }
 
-    @JsonProperty("ts")
-    public void setDateString(String s) {
+    public void setDateTime(String s) {
         ts = s;
     }
     
-    @JsonProperty("ts")
-    public String getDateString() {
+    @BsonProperty("ts")
+    public String getDateTime() {
         return ts;
     }
 
-    @JsonProperty("value")
     public void setValue(int n) {
         value = n;
     }
 
-    @JsonProperty("value")
+    @BsonProperty("value")
     public int getValue() {
         return value;
+    }
+
+    @BsonProperty("Header")
+    public Header getHeader() {
+        return header;
+    }
+
+    public void setHeader(Header header) {
+        this.header = header;
     }
 }
