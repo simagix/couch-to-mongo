@@ -17,3 +17,13 @@ mongo --quiet "mongodb://user:password@localhost/demo?replicaSet=replset&authSou
 ```
 
 It should return 12500.
+
+## Test Results
+
+Below is a result of migrating 12,500 documents, a total of 344MB, from CouchDB to MongoDB, both running on the same computer.
+
+|Tests| # of Threads| CouchDB Batch Size| MongoDB Batch Size| Time|
+|---|--:|--:|--:|--:|
+|Test 1|4|1,000|100|27 seconds|
+Test 2|4|3,200|1,100|25 seconds|
+Test 3|8|5,000|1,000|31 seconds|
