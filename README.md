@@ -24,6 +24,13 @@ gradle build
 java -jar build/libs/couch-to-mongo-0.0.1.jar
 ```
 
+The default properties file is *migration.properties*.  You can include the properties file name in the command line, for example:
+
+```bash
+java -jar couch-to-mongo-0.0.1.jar /path/my.properties
+```
+
+
 ## Validation
 
 ```bash
@@ -41,3 +48,8 @@ Below is a result of migrating 12,500 documents, a total of 344MB, from CouchDB 
 |Test 1|4|1,000|100|27 seconds|
 Test 2|4|3,200|1,100|25 seconds|
 Test 3|8|5,000|1,000|31 seconds|
+
+## What's Next
+
+- Resumable: this requires the migration application to take a snapshot of the original states
+- Watch change streams of CouchDB
