@@ -49,6 +49,16 @@ Below is a result of migrating 12,500 documents, a total of 344MB, from CouchDB 
 Test 2|4|3,200|1,100|25 seconds|
 Test 3|8|5,000|1,000|31 seconds|
 
+## Download from Docker Hub
+
+```bash
+#!/bin/bash
+docker rmi -f simagix/couch-to-mongo
+id=$(docker create simagix/couch-to-mongo)
+docker cp $id:/couch-to-mongo.jar .
+docker rm $id
+```
+
 ## What's Next
 
 - Resumable: this requires the migration application to take a snapshot of the original states
