@@ -28,11 +28,15 @@ import org.ektorp.ViewResult;
 import org.ektorp.http.HttpClient;
 import org.ektorp.http.StdHttpClient;
 import org.ektorp.impl.StdCouchDbInstance;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
 public class MongoMigration {
+	private Logger logger = LoggerFactory.getLogger(MongoMigration.class);
+	
 	private String couchdbURI = "http://127.0.0.1:5984";
 	private String mongodbURI = "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin";
 	private String dbName = "demo";
@@ -43,7 +47,6 @@ public class MongoMigration {
 	private int fetched = 0;
 	private int inserted = 0;
 	private int offset = 0;
-	private boolean verbose;
 
 	public void execute() throws MalformedURLException, InterruptedException {
 		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
@@ -65,29 +68,30 @@ public class MongoMigration {
 							ptr = this.offset;
 							this.offset += couchBatchSize;
 						}
-						println(String.format("[%d] skipped %d, limited: %d%n", id, ptr, couchBatchSize));
+						logger.debug(String.format("[%d] skipped %d, limited: %d", id, ptr, couchBatchSize));
 						ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(ptr);
 						ViewResult result = db.queryView(query);
 						if (result.isEmpty()) {
-							println(String.format("[%d] exiting loop%n", id));
+							logger.debug(String.format("[%d] exiting loop", id));
 							break;
 						}
 						synchronized (this) {
 							this.fetched += result.getSize();
-							System.out.printf("[%d] total of %d fetched%n", id, this.fetched);
+							logger.info(String.format("[%d] total of %d fetched", id, this.fetched));
 						}
 
 						processViewResults(result, collection, id);
 						Thread.sleep(100);
 					}
 				}
-				println(String.format("[%d] returning%n", id));
+				logger.debug(String.format("[%d] returning", id));
 				return null;
 			});
 		}
 		int count = 0;
 		while(count++ < 10 && this.fetched != this.inserted) {
-			println(String.format("fetched %d, inserted %d%n", this.fetched, this.inserted));
+			String message = String.format("fetched %d, inserted %d", this.fetched, this.inserted);
+			logger.debug(message);
 			Thread.sleep(5000);
 		}
 		executor.shutdown();
@@ -105,9 +109,8 @@ public class MongoMigration {
 			mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
 			dbName = prop.getProperty("database_name");
 			collectionName = prop.getProperty("collection_name");
-			verbose = Boolean.valueOf(prop.getProperty("verbose"));
 		} catch (IOException ex) {
-			println("use default properties");
+			logger.debug("use default properties");
 		}
 	}
 
@@ -130,17 +133,13 @@ public class MongoMigration {
 		}
 		InsertManyOptions options = new InsertManyOptions();
 		options.ordered(false);
-		println(String.format("documents size %d%n", documents.size()));
+		String message = String.format("documents size %d", documents.size());
+		logger.debug(message);
 		InsertManyResult res = collection.insertMany(documents, options);
 		synchronized (this) {
 			this.inserted += res.getInsertedIds().size();
-			println(String.format("[%d] %d sent, %d inserted%n", id, documents.size(), res.getInsertedIds().size()));
-		}
-	}
-
-	private void println(String message) {
-		if (this.verbose) {
-			System.out.println(message);
+			message = String.format("[%d] %d sent, %d inserted", id, documents.size(), res.getInsertedIds().size());
+			logger.debug(message);
 		}
 	}
 

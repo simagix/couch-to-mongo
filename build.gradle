@@ -5,8 +5,8 @@ plugins {
 	id 'java'
 }
 
-group = 'com.example'
-version = '0.0.1-SNAPSHOT'
+group = 'demo'
+version = '0.0.1'
 sourceCompatibility = '11'
 
 repositories {
@@ -15,13 +15,33 @@ repositories {
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter'
+	implementation 'org.springframework.boot:spring-boot-starter-logging:2.4.2'
 	implementation 'org.ektorp:org.ektorp:1.3.0'
 	implementation 'org.mongodb:mongodb-driver-sync:4.1.1'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
-test {
-	useJUnitPlatform()
-}
+// test {
+// 	useJUnitPlatform()
+// }
 
 mainClassName = "demo.MongoMigration"
+
+jar {
+  manifest { 
+    attributes "Main-Class": "$mainClassName"
+  }  
+
+  from {
+    configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+  }
+}
+
+task fatJar(type: Jar) {
+    manifest {
+        attributes "Main-Class": "$mainClassName"
+    }
+    baseName = 'couch-to-mongo'
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}
