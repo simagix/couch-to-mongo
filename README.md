@@ -55,7 +55,7 @@ Test 3|8|5,000|1,000|31 seconds|
 #!/bin/bash
 docker rmi -f simagix/couch-to-mongo
 id=$(docker create simagix/couch-to-mongo)
-docker cp $id:/couch-to-mongo.jar .
+docker cp $id:/dist - | tar vx
 docker rm $id
 ```
 
