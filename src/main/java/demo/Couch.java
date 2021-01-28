@@ -23,6 +23,9 @@ import org.slf4j.LoggerFactory;
 public class Couch {
     private Logger logger = LoggerFactory.getLogger(Couch.class);
 	private String couchdbURI;
+	private String couchdbUsername;
+	private String couchdbPassword;
+	private int timeout;
     private String mongodbURI;
 	private String dbName;
 	private String collectionName;
@@ -37,6 +40,9 @@ public class Couch {
     public Couch(Properties prop) {
         couchdbURI = prop.getProperty("couchdb.uri");
         mongodbURI = prop.getProperty("mongodb.uri");
+        couchdbUsername = prop.getProperty("couchdb.username");
+        couchdbPassword = prop.getProperty("couchdb.password");
+        timeout = Integer.valueOf(prop.getProperty("couchdb.timeout"));
         numThreads = Integer.valueOf(prop.getProperty("num_threads"));
         couchBatchSize = Integer.valueOf(prop.getProperty("couch_batch_size"));
         mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
@@ -46,7 +52,10 @@ public class Couch {
 
 	public void migrate() throws MalformedURLException, InterruptedException {
 		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
-		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).build();
+		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI)
+			.connectionTimeout(timeout).socketTimeout(timeout)
+			.username(couchdbUsername).password(couchdbPassword)
+			.build();
 		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
 		CouchDbConnector db = dbInstance.createConnector(dbName, true);
 
@@ -60,19 +69,23 @@ public class Couch {
 							ptr = this.offset;
 							this.offset += couchBatchSize;
 						}
-						logger.debug(String.format("[%d] skipped %d, limited: %d", id, ptr, couchBatchSize));
-						ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(ptr);
-						ViewResult result = db.queryView(query);
-						if (result.isEmpty()) {
-							logger.info(String.format("[%d] exiting loop, %s.%s has %d documents", id, dbName, collectionName, mongo.countDocuments(dbName, collectionName)));
-							break;
-						}
-						synchronized (this) {
-							this.fetched += result.getSize();
-							logger.info(String.format("[%d] total of %d fetched", id, this.fetched));
-						}
+						try {
+							logger.debug(String.format("[%d] skipped %d, limited: %d", id, ptr, couchBatchSize));
+							ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(ptr);
+							ViewResult result = db.queryView(query);
+							if (result.isEmpty()) {
+								logger.info(String.format("[%d] exiting loop, %s.%s has %d documents", id, dbName, collectionName, mongo.countDocuments(dbName, collectionName)));
+								break;
+							}
+							synchronized (this) {
+								this.fetched += result.getSize();
+								logger.info(String.format("[%d] total of %d fetched", id, this.fetched));
+							}
 
-						processViewResults(result, mongo, id);
+							processViewResults(result, mongo, id);
+						} catch(Exception ex) {
+							logger.error(ex.getMessage());
+						}
 						Thread.sleep(100);
 					}
 				}
@@ -104,11 +117,13 @@ public class Couch {
 				documents = new ArrayList<>();
 			}
 		}
-		int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
-		String message = String.format("[%d] %d sent, %d inserted", id, documents.size(), saved);
-		logger.debug(message);
-        synchronized (this) {
-            this.inserted += saved;
-        }
+		if ( ! documents.isEmpty() ) {
+			int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
+			String message = String.format("[%d] %d sent, %d inserted", id, documents.size(), saved);
+			logger.debug(message);
+			synchronized (this) {
+				this.inserted += saved;
+			}
+		}
 	}
 }

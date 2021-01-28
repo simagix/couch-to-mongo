@@ -36,6 +36,9 @@ public class CouchToMongo {
 		} catch (IOException ex) {
 			logger.info("use default properties");
 			prop.setProperty("couchdb.uri", "http://127.0.0.1:5984");
+			prop.setProperty("couchdb.username", "user");
+			prop.setProperty("couchdb.password", "password");
+			prop.setProperty("couchdb.timeout", String.valueOf(60000));
 			prop.setProperty("mongodb.uri", "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin");
 			prop.setProperty("num_threads", String.valueOf(4));
 			prop.setProperty("couch_batch_size", String.valueOf(10000));
