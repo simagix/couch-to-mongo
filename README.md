@@ -1,6 +1,13 @@
 # CouchDB to MongoDB Migration
 
-Migrate data from CouchDB to MongoDB.
+Migrate data from CouchDB to MongoDB.  The algoirthm is based on the fact that in CouchDB, documents are sorted by the document ID.  The application uses a thread to read data off CouchDB and kicks off multiple threads to save data to MongoDB.
+
+## Algorithm
+
+- Read document IDs from CouchDB
+- Divide the documents reading by *couch_batch_size*
+- Use `startDocId` and `endDocId` to read all dccuments within the range
+- Submit the task to the created thread pool to save data to the mongo server
 
 ## Setup Env
 

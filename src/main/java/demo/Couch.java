@@ -1,6 +1,7 @@
 // Copyright 2020 Kuei-chun Chen. All rights reserved.
 package demo;
 
+import java.io.EOFException;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,87 +22,97 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class Couch {
-    private Logger logger = LoggerFactory.getLogger(Couch.class);
+	private Logger logger = LoggerFactory.getLogger(Couch.class);
 	private String couchdbURI;
-	private String couchdbUsername;
-	private String couchdbPassword;
 	private int timeout;
-    private String mongodbURI;
+	private String mongodbURI;
 	private String dbName;
 	private String collectionName;
 	private int numThreads;
 	private int couchBatchSize;
-    private int mongoBatchSize;
-    
-	private int fetched = 0;
-	private int inserted = 0;
-    private int offset = 0;
-    
-    public Couch(Properties prop) {
-        couchdbURI = prop.getProperty("couchdb.uri");
-        mongodbURI = prop.getProperty("mongodb.uri");
-        couchdbUsername = prop.getProperty("couchdb.username");
-        couchdbPassword = prop.getProperty("couchdb.password");
-        timeout = Integer.valueOf(prop.getProperty("couchdb.timeout"));
-        numThreads = Integer.valueOf(prop.getProperty("num_threads"));
-        couchBatchSize = Integer.valueOf(prop.getProperty("couch_batch_size"));
-        mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
-        dbName = prop.getProperty("database_name");
-        collectionName = prop.getProperty("collection_name");
-    }
+	private int mongoBatchSize;
 
-	public void migrate() throws MalformedURLException, InterruptedException {
+	private long fetched = 0;
+	private long inserted = 0;
+
+	public Couch(Properties prop) {
+		couchdbURI = prop.getProperty("couchdb.uri");
+		mongodbURI = prop.getProperty("mongodb.uri");
+		timeout = Integer.valueOf(prop.getProperty("couchdb.timeout"));
+		numThreads = Integer.valueOf(prop.getProperty("num_threads"));
+		couchBatchSize = Integer.valueOf(prop.getProperty("couch_batch_size"));
+		mongoBatchSize = Integer.valueOf(prop.getProperty("mongo_batch_size"));
+		dbName = prop.getProperty("database_name");
+		collectionName = prop.getProperty("collection_name");
+	}
+
+	public void migrate() throws MalformedURLException, EOFException, InterruptedException {
 		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
-		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI)
-			.connectionTimeout(timeout).socketTimeout(timeout)
-			.username(couchdbUsername).password(couchdbPassword)
-			.build();
+		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).connectionTimeout(timeout)
+				.socketTimeout(timeout).build();
 		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
 		CouchDbConnector db = dbInstance.createConnector(dbName, true);
 
-		for (int t = 0; t < numThreads; t++) {
-			executor.submit(() -> {
-				long id = Thread.currentThread().getId() % numThreads;
-				try (Mongo mongo = new Mongo(this.mongodbURI)) {
-					for (;;) {
-						int ptr;
-						synchronized (this) {
-							ptr = this.offset;
-							this.offset += couchBatchSize;
-						}
-						try {
-							logger.debug(String.format("[%d] skipped %d, limited: %d", id, ptr, couchBatchSize));
-							ViewQuery query = new ViewQuery().allDocs().includeDocs(true).limit(couchBatchSize).skip(ptr);
-							ViewResult result = db.queryView(query);
-							if (result.isEmpty()) {
-								logger.info(String.format("[%d] exiting loop, %s.%s has %d documents", id, dbName, collectionName, mongo.countDocuments(dbName, collectionName)));
-								break;
-							}
-							synchronized (this) {
-								this.fetched += result.getSize();
-								logger.info(String.format("[%d] total of %d fetched", id, this.fetched));
-							}
-
-							processViewResults(result, mongo, id);
-						} catch(Exception ex) {
-							logger.error(ex.getMessage());
-						}
-						Thread.sleep(100);
-					}
+		try (Mongo mongo = new Mongo(this.mongodbURI)) {
+			this.inserted = mongo.countDocuments(dbName, collectionName);
+			ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
+			ViewResult result = db.queryView(query);
+			if (result.isEmpty()) {
+				throw new EOFException("no document found");
+			}
+			logger.info(String.format("found %d documents in CouchDB", result.getSize()));
+			int counter = 0;
+			String startDocId = null;
+			String endDocId = null;
+			for (ViewResult.Row row : result.getRows()) {
+				counter++;
+				endDocId = row.getId();
+				if (counter == 1) {
+					startDocId = row.getId();
+					counter++;
+				} else if (counter == couchBatchSize) {
+					ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocId).endDocId(endDocId)
+							.inclusiveEnd(true);
+					ViewResult res = db.queryView(q);
+					this.fetched += res.getSize();
+					executor.submit(() -> {
+						long id = Thread.currentThread().getId() % numThreads;
+						processViewResults(res, mongo, id);
+					});
+					logger.info(String.format("total of %d fetched, %d inserted", this.fetched, this.inserted));
+					counter = 0;
+					while (executor.getQueue().size() > numThreads) {
+						logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
+						Thread.sleep(5000);	// throttle and yield
+					};
 				}
-				return null;
-			});
+			}
+			if (counter > 0) {
+				ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocId).endDocId(endDocId)
+						.inclusiveEnd(true);
+				ViewResult res = db.queryView(q);
+				this.fetched += res.getSize();
+				executor.submit(() -> {
+					long id = Thread.currentThread().getId() % numThreads;
+					processViewResults(res, mongo, id);
+				});
+			}
+			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
+			long inMongo = mongo.countDocuments(dbName, collectionName);
+			while (this.fetched != inMongo) {
+				synchronized (this) {
+					logger.info(String.format("total of %d fetched, %d in mongo", this.fetched, inMongo));
+				}
+				Thread.sleep(5000);
+				inMongo = mongo.countDocuments(dbName, collectionName);
+			}
+			executor.shutdown();
+			executor.awaitTermination(5, TimeUnit.SECONDS);
+		} catch (Exception ex) {
+			ex.printStackTrace();
 		}
-		int count = 0;
-		while(count++ < 10 && this.fetched != this.inserted) {
-			String message = String.format("fetched %d, inserted %d", this.fetched, this.inserted);
-			logger.debug(message);
-			Thread.sleep(5000);
-        }
-		executor.shutdown();
-		executor.awaitTermination(5, TimeUnit.SECONDS);
-    }
-    
+	}
+
 	private void processViewResults(ViewResult result, Mongo mongo, long id) {
 		List<Document> documents = new ArrayList<>();
 		int i = 0;
@@ -109,7 +120,7 @@ public class Couch {
 			documents.add(Document.parse(row.getDoc()));
 			if ((++i) % mongoBatchSize == 0) {
 				int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
-				String message = String.format("[%d] %d sent, %d inserted", id, documents.size(), saved);
+				String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 				logger.debug(message);
 				synchronized (this) {
 					this.inserted += saved;
@@ -117,9 +128,9 @@ public class Couch {
 				documents = new ArrayList<>();
 			}
 		}
-		if ( ! documents.isEmpty() ) {
+		if (!documents.isEmpty()) {
 			int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
-			String message = String.format("[%d] %d sent, %d inserted", id, documents.size(), saved);
+			String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 			logger.debug(message);
 			synchronized (this) {
 				this.inserted += saved;

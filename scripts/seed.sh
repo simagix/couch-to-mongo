@@ -6,9 +6,9 @@ if [ "$1" != "" ]; then
 fi
 
 curl -H 'Content-Type: application/json' \
-    -X DELETE http://127.0.0.1:5984/$db
+    -X DELETE http://user:password@127.0.0.1:5984/$db
 curl -H 'Content-Type: application/json' \
-    -X PUT http://127.0.0.1:5984/$db
+    -X PUT http://user:password@127.0.0.1:5984/$db
 
 blah='"Analytics": {
   "annotations": {
@@ -2650,16 +2650,17 @@ blah='"Analytics": {
 }
 '
 id=10001
-for i in {1..50}
+for i in {1..100}
 do
-    echo "seeding batch ${i}/50"
-    for j in {1001..1250}
+    echo "seeding batch ${i}/100"
+    for j in {1001..1500}
     do
         value=$(expr $i + $j)
         str=$(date)
         mesg='{ "value": '"${value}"', "ts": "'"${str}"'" '
         mesg=${mesg}','"${blah}"'}'
-        curl -X PUT http://127.0.0.1:5984/$db/"${id}" -d "${mesg}" > /dev/null 2>&1
+        curl -X PUT http://user:password@127.0.0.1:5984/$db/"${id}" -d "${mesg}" > /dev/null 2>&1
         id=$(expr $id + 1)
     done
+    sleep 1
 done
