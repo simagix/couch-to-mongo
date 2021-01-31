@@ -2649,18 +2649,25 @@ blah='"Analytics": {
   "version": 95
 }
 '
+
 id=10001
-for i in {1..100}
+for i in {1..5000}
 do
-    echo "seeding batch ${i}/100"
-    for j in {1001..1500}
+    echo "seeding batch ${i}/5000"
+    docs='{"docs": ['
+    for j in {1001..1004}
     do
         value=$(expr $i + $j)
         str=$(date)
-        mesg='{ "value": '"${value}"', "ts": "'"${str}"'" '
-        mesg=${mesg}','"${blah}"'}'
-        curl -X PUT http://user:password@127.0.0.1:5984/$db/"${id}" -d "${mesg}" > /dev/null 2>&1
+        mesg='{ "_id": "'"${id}"'","value":'"${value}"',"ts": "'"${str}"'" '
+        docs=$docs${mesg}','"${blah}"'},'
         id=$(expr $id + 1)
     done
-    sleep 1
+    docs=${docs::${#docs}-1}']}'
+    curl -X POST -H "Content-Type: application/json" http://user:password@127.0.0.1:5984/$db/_bulk_docs -d "${docs}" > /dev/null 2>&1 &
+done
+
+for job in `jobs -p`
+do
+    wait $job
 done
