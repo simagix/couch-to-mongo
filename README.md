@@ -48,7 +48,7 @@ It should return 20000.
 
 ## Test Results
 
-Below is a result of migrating 20,000 documents, a total of 551MB, from CouchDB to MongoDB, both running on the same computer.
+Below is a result of migrating 20,000 documents, a total of 442MB, from CouchDB to MongoDB, both running on the same computer.
 
 |Tests| # of Threads| CouchDB Batch Size| MongoDB Batch Size| Time|
 |---|--:|--:|--:|--:|

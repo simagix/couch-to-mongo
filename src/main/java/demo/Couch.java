@@ -79,12 +79,12 @@ public class Couch {
 						long id = Thread.currentThread().getId() % numThreads;
 						processViewResults(res, mongo, id);
 					});
-					logger.info(String.format("total of %d fetched, %d inserted", this.fetched, this.inserted));
+					logger.info(String.format("fetching, total of %d fetched, %d inserted", this.fetched, this.inserted));
 					counter = 0;
 					while (executor.getQueue().size() > numThreads) {
 						logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
 						Thread.sleep(5000);	// throttle and yield
-					};
+					}
 				}
 			}
 			if (counter > 0) {
@@ -97,6 +97,7 @@ public class Couch {
 					processViewResults(res, mongo, id);
 				});
 			}
+			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", this.fetched, this.inserted));
 			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
 			long inMongo = mongo.countDocuments(dbName, collectionName);
 			while (this.fetched != inMongo) {
@@ -108,6 +109,8 @@ public class Couch {
 			}
 			executor.shutdown();
 			executor.awaitTermination(5, TimeUnit.SECONDS);
+			inMongo = mongo.countDocuments(dbName, collectionName);
+			logger.info(String.format("total of %d fetched, %d in mongo", this.fetched, inMongo));
 		} catch (Exception ex) {
 			ex.printStackTrace();
 		}
