@@ -3,7 +3,7 @@ RUN mkdir -p /github.com/simagix/couch-to-mongo
 ADD . /github.com/simagix/couch-to-mongo
 WORKDIR /github.com/simagix/couch-to-mongo
 RUN gradle build
-FROM gradle:6.8.1-jre11
+FROM adoptopenjdk/openjdk11:alpine-jre
 LABEL Ken Chen <ken.chen@simagix.com>
 USER simagix
 WORKDIR /dist
