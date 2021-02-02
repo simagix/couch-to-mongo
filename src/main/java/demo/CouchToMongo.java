@@ -1,15 +1,16 @@
 // Copyright 2020 Kuei-chun Chen. All rights reserved.
 package demo;
 
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Properties;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.Properties;
 
 @SpringBootApplication
 public class CouchToMongo {
@@ -17,13 +18,16 @@ public class CouchToMongo {
 
 	public static void main(String[] args) {
 		SpringApplication.run(CouchToMongo.class, args);
-		
+
+		logger.info("Found args :" + Arrays.toString(args));
+
 		try {
 			String filename = "migration.properties";
-			if (args.length > 1) {
-				filename = args[1];
+			if (args.length > 0) {
+				filename = args[0];
+				logger.info("Setting filename to " + filename);
 			}
-			new Couch(readProperties(filename)).migrate();
+			new demo.Couch(readProperties(filename)).migrate();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -32,9 +36,14 @@ public class CouchToMongo {
 	private static Properties readProperties(String filename) {
 		Properties prop = new Properties();
 		try (InputStream input = new FileInputStream(filename)) {
+			logger.info("Attempting to load properties file " + filename);
 			prop.load(input);
 		} catch (IOException ex) {
-			logger.info("use default properties");
+
+			logger.error(String.format("Encountered an issue attempting to read from property file %s: %s", filename, ex.getMessage()));
+			logger.error(ex.toString());
+
+			logger.info("Using default properties after error...");
 			prop.setProperty("couchdb.uri", "http://user:password@127.0.0.1:5984");
 			prop.setProperty("couchdb.timeout", String.valueOf(60000));
 			prop.setProperty("mongodb.uri", "mongodb://user:password@localhost/?replicaSet=replset&authSource=admin");
