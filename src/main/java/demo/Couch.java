@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.io.EOFException;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.Executors;
@@ -60,7 +61,11 @@ public class Couch {
 		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
 		CouchDbConnector db = dbInstance.createConnector(dbName, true);
 
-		try (Mongo mongo = new Mongo(this.mongodbURI)) {
+
+		Mongo mongo = new Mongo(this.mongodbURI);
+		mongo.insertStartTimeMetaData(new Date());
+
+		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
 			inserted.getAndSet(count) ;
 
@@ -175,6 +180,7 @@ public class Couch {
 			logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 
 			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
+			mongo.insertEndTimeMetaData(new Date());
 
 		} catch (Exception ex) {
 			ex.printStackTrace();

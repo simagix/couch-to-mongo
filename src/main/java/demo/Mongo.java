@@ -24,6 +24,7 @@ public class Mongo implements AutoCloseable {
     private Logger logger = LoggerFactory.getLogger(Mongo.class);
     private MongoClient mongoClient;
 
+    private final String DEMO_DB_NAME = "demo";
     private final String MIGRATION_COLLECTION_METADATA_NAME = "migration.metadata";
 
     private final int MAX_NUM_INSERT_ATTEMPTS = 10;
@@ -137,6 +138,27 @@ public class Mongo implements AutoCloseable {
 
         return numDocs;
     }
+
+    public void insertStartTimeMetaData(Date date) {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(DEMO_DB_NAME)
+                                                            .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                                                            .withWriteConcern(wc);
+
+        Document startTimeDoc = new Document("operation", "start").append("time", date);
+        collection.insertOne(startTimeDoc);
+    }
+
+    public void insertEndTimeMetaData(Date date) {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(DEMO_DB_NAME)
+                                                            .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                                                            .withWriteConcern(wc);
+
+        Document startTimeDoc = new Document("operation", "end").append("time", date);
+        collection.insertOne(startTimeDoc);
+    }
+
 
     private void sleep(long millis) {
         try {
