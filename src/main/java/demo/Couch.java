@@ -34,7 +34,7 @@ public class Couch {
 	private int mongoBatchSize;
 
 
-	private long fetched = 0;
+	private AtomicLong fetched;
 	private AtomicLong inserted;
 
 	public Couch(Properties prop) {
@@ -47,6 +47,7 @@ public class Couch {
 		dbName = prop.getProperty("database_name");
 		collectionName = prop.getProperty("collection_name");
 
+		fetched = new AtomicLong(0);
 		inserted = new AtomicLong(0);
 	}
 
@@ -90,24 +91,28 @@ public class Couch {
 					counter++;
 				} else if (counter == couchBatchSize) {
 
-					// Record
-					startTime2 = System.currentTimeMillis();
-
-					ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocId).endDocId(endDocId)
-							.inclusiveEnd(true);
-					ViewResult res = db.queryView(q);
-					logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
-												System.currentTimeMillis() - startTime2,
-												startDocId,
-												endDocId));
-
-					// Record
-					startTime2 = System.currentTimeMillis();
-					fetched += res.getSize();
-
-					logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime2));
+					final String startDocumentId = startDocId;
+					final String endDocumentId = endDocId;
 
 					executor.submit(() -> {
+
+						// Record
+						long startTime3 = System.currentTimeMillis();
+
+						ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
+								.inclusiveEnd(true);
+						ViewResult res = db.queryView(q);
+						logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
+								System.currentTimeMillis() - startTime3,
+								startDocumentId,
+								endDocumentId));
+
+						// Record
+						startTime3 = System.currentTimeMillis();
+						fetched.addAndGet(res.getSize());
+
+						logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
+
 						long id = Thread.currentThread().getId() % numThreads;
 						logger.info(String.format("Starting thread with id %d", id));
 
@@ -116,7 +121,7 @@ public class Couch {
 						logger.info(String.format("Thread %d finished ", id));
 					});
 
-					logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched, inserted.get()));
+					logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched.get(), inserted.get()));
 					counter = 0;
 					while (executor.getQueue().size() > numThreads) {
 						logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
@@ -128,20 +133,24 @@ public class Couch {
 			// Insert remaining docs
 			if (counter > 0) {
 
-				startTime2 = System.currentTimeMillis();
-				ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocId).endDocId(endDocId)
-						.inclusiveEnd(true);
-				ViewResult res = db.queryView(q);
-				logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
-						System.currentTimeMillis() - startTime2,
-						startDocId,
-						endDocId));
-
-				startTime2 = System.currentTimeMillis();
-				fetched += res.getSize();
-				logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime2));
+				final String startDocumentId = startDocId;
+				final String endDocumentId = endDocId;
 
 				executor.submit(() -> {
+					long startTime3 = System.currentTimeMillis();
+
+					ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
+							.inclusiveEnd(true);
+					ViewResult res = db.queryView(q);
+					logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
+							System.currentTimeMillis() - startTime3,
+							startDocumentId,
+							endDocumentId));
+
+					startTime3 = System.currentTimeMillis();
+					fetched.addAndGet(res.getSize());
+					logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
+
 					long id = Thread.currentThread().getId() % numThreads;
 					logger.info(String.format("Starting thread with id %d", id));
 
@@ -151,19 +160,19 @@ public class Couch {
 				});
 			}
 
-			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched, inserted.get()));
+			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), inserted.get()));
 			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
 			long inMongo = mongo.countDocuments(dbName, collectionName);
-			while (fetched != inMongo) {
+			while (fetched.get() != inMongo) {
 
-				logger.info(String.format("total of %d fetched, %d in mongo", fetched, inMongo));
+				logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 				Thread.sleep(5000);
 				inMongo = mongo.countDocuments(dbName, collectionName);
 			}
 			executor.shutdown();
 			executor.awaitTermination(5, TimeUnit.SECONDS);
 			inMongo = mongo.countDocuments(dbName, collectionName);
-			logger.info(String.format("total of %d fetched, %d in mongo", fetched, inMongo));
+			logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 
 			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
 
