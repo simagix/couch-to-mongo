@@ -2,20 +2,29 @@
 package demo;
 
 import com.mongodb.*;
+import com.mongodb.bulk.BulkWriteError;
+import com.mongodb.bulk.BulkWriteInsert;
+import com.mongodb.bulk.BulkWriteResult;
+import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.InsertManyOptions;
+import com.mongodb.client.model.InsertOneOptions;
 import com.mongodb.client.result.InsertManyResult;
+import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import javax.print.Doc;
+import java.util.*;
 
 public class Mongo implements AutoCloseable {
     private Logger logger = LoggerFactory.getLogger(Mongo.class);
     private MongoClient mongoClient;
+
+    private final String MIGRATION_COLLECTION_METADATA_NAME = "migration.metadata";
 
     private final int MAX_NUM_INSERT_ATTEMPTS = 10;
     private final int MAX_NUM_READ_ATTEMPTS = 10;
@@ -61,6 +70,7 @@ public class Mongo implements AutoCloseable {
                 logger.info(String.format("Successfully inserted %d documents", resultSize));
 
                 if (resultSize > 0) {
+                    insertMetaData(dbName, res);
                     break;
                 }
 
@@ -73,10 +83,12 @@ public class Mongo implements AutoCloseable {
 
             } catch (MongoBulkWriteException ex) {
 
+                insertMetaData(dbName, ex.getWriteResult(), ex.getWriteErrors());
+
                 logger.error("Encountered MongoBulkWriteException: " + ex);
                 logger.error(ex.getMessage());
                 sleep(2000);
-                continue;
+                break;
             } catch (Exception ex) {
 
                 logger.error("Encountered exception: " + ex);
@@ -126,7 +138,7 @@ public class Mongo implements AutoCloseable {
         return numDocs;
     }
 
-    public void sleep(long millis) {
+    private void sleep(long millis) {
         try {
             Thread.sleep(millis);
         } catch (InterruptedException ex) {
@@ -135,4 +147,54 @@ public class Mongo implements AutoCloseable {
         }
     }
 
+    private void insertMetaData(String dbName, InsertManyResult result) {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
+                .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                .withWriteConcern(wc);
+
+        Set<BsonValue> insertedIds = new HashSet<>();
+        for (BsonValue value : result.getInsertedIds().values()) {
+            insertedIds.add(value.asString());
+        }
+
+        Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds);
+        collection.insertOne(metaDataDoc);
+    }
+
+    private void insertMetaData(String dbName, BulkWriteResult result, Collection<BulkWriteError> errors) {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
+                                                            .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                                                            .withWriteConcern(wc);
+
+        Set<BsonValue> insertedIds = new HashSet<>();
+        for (BulkWriteInsert bulkWriteInsert : result.getInserts()) {
+            insertedIds.add(bulkWriteInsert.getId());
+        }
+
+        Set<BsonValue> upsertedIds = new HashSet<>();
+        for (BulkWriteUpsert bulkWriteUpsert : result.getUpserts()) {
+            upsertedIds.add(bulkWriteUpsert.getId());
+        }
+
+        Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
+                                                                .append("upsertedIds", upsertedIds)
+                                                                .append("error", errors);
+
+        collection.insertOne(metaDataDoc);
+    }
+
+    // TODO : may not need this
+    private Set<Document> getUninsertedDocuments(Set<Document> documents, InsertManyResult result) {
+
+        Collection<BsonValue> insertedIds = result.getInsertedIds().values();
+        Set<Document> newDocuments = new HashSet<>();
+        for (Document document : documents ) {
+            if (insertedIds.contains((BsonValue) document.get("_id"))) {
+                continue;
+            }
+        }
+        return newDocuments;
+    }
 }
