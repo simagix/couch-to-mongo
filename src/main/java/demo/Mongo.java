@@ -24,7 +24,6 @@ public class Mongo implements AutoCloseable {
     private Logger logger = LoggerFactory.getLogger(Mongo.class);
     private MongoClient mongoClient;
 
-    private final String DEMO_DB_NAME = "demo";
     private final String MIGRATION_COLLECTION_METADATA_NAME = "migration.metadata";
 
     private final int MAX_NUM_INSERT_ATTEMPTS = 10;
@@ -42,7 +41,7 @@ public class Mongo implements AutoCloseable {
         mongoClient.close();
     }
 
-	public int saveToMongo(String dbName, String collectionName, List<Document> documents) {
+	public int saveToMongo(String dbName, String collectionName, List<Document> documents, Long threadId) {
         long startTime = System.currentTimeMillis();
 
         logger.info("Saving data to mongo");
@@ -71,7 +70,7 @@ public class Mongo implements AutoCloseable {
                 logger.info(String.format("Successfully inserted %d documents", resultSize));
 
                 if (resultSize > 0) {
-                    insertMetaData(dbName, res);
+                    insertMetaData(dbName, threadId, res);
                     break;
                 }
 
@@ -84,7 +83,7 @@ public class Mongo implements AutoCloseable {
 
             } catch (MongoBulkWriteException ex) {
 
-                insertMetaData(dbName, ex.getWriteResult(), ex.getWriteErrors());
+                insertMetaData(dbName, threadId, ex.getWriteResult(), ex.getWriteErrors());
 
                 logger.error("Encountered MongoBulkWriteException: " + ex);
                 logger.error(ex.getMessage());
@@ -139,9 +138,10 @@ public class Mongo implements AutoCloseable {
         return numDocs;
     }
 
-    public void insertStartTimeMetaData(Date date) {
+    // TODO merge with following method
+    public void insertStartTimeMetaData(String dbName, Date date) {
         WriteConcern wc = new WriteConcern(0);
-        MongoCollection<Document> collection = mongoClient.getDatabase(DEMO_DB_NAME)
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
@@ -149,9 +149,9 @@ public class Mongo implements AutoCloseable {
         collection.insertOne(startTimeDoc);
     }
 
-    public void insertEndTimeMetaData(Date date) {
+    public void insertEndTimeMetaData(String dbName, Date date) {
         WriteConcern wc = new WriteConcern(0);
-        MongoCollection<Document> collection = mongoClient.getDatabase(DEMO_DB_NAME)
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
@@ -169,7 +169,8 @@ public class Mongo implements AutoCloseable {
         }
     }
 
-    private void insertMetaData(String dbName, InsertManyResult result) {
+    // TODO add thread id and run information
+    private void insertMetaData(String dbName, Long threadId, InsertManyResult result) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                 .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
@@ -184,7 +185,8 @@ public class Mongo implements AutoCloseable {
         collection.insertOne(metaDataDoc);
     }
 
-    private void insertMetaData(String dbName, BulkWriteResult result, Collection<BulkWriteError> errors) {
+    // TODO add thread id and run information
+    private void insertMetaData(String dbName, Long threadId, BulkWriteResult result, Collection<BulkWriteError> errors) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)

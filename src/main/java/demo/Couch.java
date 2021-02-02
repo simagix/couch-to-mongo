@@ -63,7 +63,7 @@ public class Couch {
 
 
 		Mongo mongo = new Mongo(this.mongodbURI);
-		mongo.insertStartTimeMetaData(new Date());
+		mongo.insertStartTimeMetaData(dbName, new Date());
 
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
@@ -180,7 +180,7 @@ public class Couch {
 			logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 
 			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
-			mongo.insertEndTimeMetaData(new Date());
+			mongo.insertEndTimeMetaData(dbName, new Date());
 
 		} catch (Exception ex) {
 			ex.printStackTrace();
@@ -197,7 +197,7 @@ public class Couch {
 		for (ViewResult.Row row : result.getRows()) {
 			documents.add(Document.parse(row.getDoc()));
 			if ((++i) % mongoBatchSize == 0) {
-				int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
+				int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents, id);
 				String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 				logger.info(message);
 
@@ -206,7 +206,7 @@ public class Couch {
 			}
 		}
 		if (!documents.isEmpty()) {
-			int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents);
+			int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents, id);
 			String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 			logger.info(message);
 
