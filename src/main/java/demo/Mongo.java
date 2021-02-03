@@ -6,39 +6,72 @@ import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.bulk.BulkWriteInsert;
 import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
-import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoClients;
-import com.mongodb.client.MongoCollection;
+import com.mongodb.client.*;
 import com.mongodb.client.model.InsertManyOptions;
-import com.mongodb.client.model.InsertOneOptions;
 import com.mongodb.client.result.InsertManyResult;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.print.Doc;
 import java.util.*;
 
 public class Mongo implements AutoCloseable {
     private Logger logger = LoggerFactory.getLogger(Mongo.class);
     private MongoClient mongoClient;
+    private String dbName;
+
+    private UUID sessionId;
+    private Set<String> existingIds = null;
 
     private final String MIGRATION_COLLECTION_METADATA_NAME = "migration.metadata";
-
     private final int MAX_NUM_INSERT_ATTEMPTS = 10;
     private final int MAX_NUM_READ_ATTEMPTS = 10;
 
-    public Mongo(String mongodbURI) {
+    public Mongo(String mongodbURI, String dbName) {
         ConnectionString connectionString = new ConnectionString(mongodbURI);
         MongoClientSettings clientSettings = MongoClientSettings.builder().applyConnectionString(connectionString)
                 .build();
         mongoClient = MongoClients.create(clientSettings);
+        this.dbName = dbName;
+
+        UUID unfinishedSessionId = getUnfinishedSession(dbName);
+        this.sessionId = unfinishedSessionId;
+        if (null == unfinishedSessionId) {
+            this.sessionId = UUID.randomUUID();
+            logger.info("Starting session with id... " + this.sessionId);
+            insertMetaDataOperation("start", new Date());
+
+            // Create empty set of existing Ids, as we will not need to find existing documents in MongoDB, because this
+            // is a new session, not a resumption of previously crashed session
+            existingIds = new HashSet<>();
+        } else {
+
+            insertMetaDataOperation("resume", new Date());
+            logger.info("Resuming session with id... " + this.sessionId);
+        }
     }
 
     @Override
     public void close() throws Exception {
         mongoClient.close();
+    }
+
+    /***
+     * Mongo Contains Id
+     *
+     * @param dbName
+     * @param collectionName
+     * @param id
+     * @return
+     */
+    public boolean mongoContainsId(String dbName, String collectionName, String id) {
+        // Lazily initialize
+        if (existingIds == null) {
+            logger.debug("Lazily initializing existing ids...");
+            existingIds = getExistingIds(dbName, collectionName);
+        }
+        return existingIds.contains(id);
     }
 
 	public int saveToMongo(String dbName, String collectionName, List<Document> documents, Long threadId) {
@@ -138,28 +171,115 @@ public class Mongo implements AutoCloseable {
         return numDocs;
     }
 
-    // TODO merge with following method
-    public void insertStartTimeMetaData(String dbName, Date date) {
+    /****
+     * Insert Meta Data Message
+     *
+     * Inserts a
+     *
+     * @param logMessage        A String representing the message to log
+     * @param date              A Date object representing the timestamp of the log message
+     */
+    public void insertMetaDataOperation(String logMessage, Date date) {
+
+        // WC = 0 is effectively an asynchronous write. Metadata ops should be async to maintain performance
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Document startTimeDoc = new Document("operation", "start").append("time", date);
+        Document startTimeDoc = new Document("operation",  logMessage).append("time", date).append("session", sessionId);
         collection.insertOne(startTimeDoc);
     }
 
-    public void insertEndTimeMetaData(String dbName, Date date) {
+    /***
+     * Get Unfinished Session
+     *
+     * @param dbName
+     * @return
+     */
+    private UUID getUnfinishedSession(String dbName) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
-                                                            .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
-                                                            .withWriteConcern(wc);
+                .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                .withWriteConcern(wc);
 
-        Document startTimeDoc = new Document("operation", "end").append("time", date);
-        collection.insertOne(startTimeDoc);
+        // Get existing session data
+        List<Document> getSessionsPipelineStages = new ArrayList<>();
+
+        List<String> startEndOps = new ArrayList<>();
+        startEndOps.add("start");
+        startEndOps.add("end");
+        Document matchStage = new Document("$match", new Document("operation", new Document("$in", startEndOps)));
+        getSessionsPipelineStages.add(matchStage);
+
+        // { operation : "start" } will appear before { operation : "last" }
+        Document sortByOpTypeStage = new Document("$sort", new Document("operation", -1));
+        getSessionsPipelineStages.add(sortByOpTypeStage);
+
+        Document groupStage = new Document("$group", new Document("_id", "$sessionId").append("start", new Document("$first", "$start"))
+                                                                                        .append("end", new Document("$first", "$end"))
+                                                                                        .append("startTime", new Document("$first", "$time"))
+                                                                                        .append("endTime", new Document("$last", "$time")));
+        getSessionsPipelineStages.add(groupStage);
+
+        Document sortByStartTimeInDescendingOrderStage = new Document("$sort", new Document("$startTime", -1));
+        getSessionsPipelineStages.add(sortByStartTimeInDescendingOrderStage);
+
+        Document limitToOneSessionStage = new Document("$limit", 1);
+        getSessionsPipelineStages.add(limitToOneSessionStage);
+
+        AggregateIterable<Document> sessionsData = collection.aggregate(getSessionsPipelineStages);
+        for (Document sessionDataDocument : sessionsData) {
+
+            // If there is no end document, then we know that this session was interrupted
+            if (sessionDataDocument.get("end") == null) {
+                return (UUID) sessionDataDocument.get("sessionId");
+            }
+            break;
+        }
+
+        // Returning null indicates that the previous session completed
+        return null;
     }
 
+    /***
+     * Get Existing Ids
+     *
+     * @param dbName
+     * @param collectionName
+     * @return
+     */
+    private Set<String> getExistingIds(String dbName, String collectionName) {
+        long startTime = System.currentTimeMillis();
 
+        logger.info(String.format("Getting existing ids in MongoDB namespace %s.%s", dbName, collectionName));
+        Set<String> ids = new HashSet<>();
+
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
+        Document queryAllDoc = new Document();
+        Document projectionOnlyIdDocument = new Document("_id", 1);
+        Document sortOnIdDoc = new Document("_id", 1);
+
+        FindIterable<Document> cursor = collection.find(queryAllDoc).projection(projectionOnlyIdDocument).sort(sortOnIdDoc);
+        for (Document document : cursor) {
+            logger.trace("Adding " + document.get("_id") + " to set");
+            ids.add((String) document.get("_id"));
+        }
+
+        // Record time
+        long endTime = System.currentTimeMillis();
+        logger.debug(String.format("getExistingIds() lasted %d mills", endTime - startTime));
+
+        return ids;
+    }
+
+    /***
+     * Sleep
+     *
+     * Sleeps for the specified number of milliseconds, catching InterruptedException that may be thrown
+     *
+     * @param millis    A long representing the number of milliseconds to sleep for
+     */
     private void sleep(long millis) {
         try {
             Thread.sleep(millis);
@@ -169,7 +289,15 @@ public class Mongo implements AutoCloseable {
         }
     }
 
-    // TODO add thread id and run information
+    /***
+     * Insert Meta Data
+     *
+     * Records meta data about a successful BulkWrite attempt
+     *
+     * @param dbName
+     * @param threadId
+     * @param result
+     */
     private void insertMetaData(String dbName, Long threadId, InsertManyResult result) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
@@ -181,7 +309,8 @@ public class Mongo implements AutoCloseable {
             insertedIds.add(value.asString());
         }
 
-        Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds);
+        Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
+                                                                .append("threadId", threadId);
         collection.insertOne(metaDataDoc);
     }
 
@@ -204,8 +333,8 @@ public class Mongo implements AutoCloseable {
 
         Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
                                                                 .append("upsertedIds", upsertedIds)
-                                                                .append("error", errors);
-
+                                                                .append("error", errors)
+                                                                .append("threadId", threadId);
         collection.insertOne(metaDataDoc);
     }
 
