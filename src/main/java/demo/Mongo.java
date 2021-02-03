@@ -89,7 +89,7 @@ public class Mongo implements AutoCloseable {
 		Map<String, String> docIdToSeqNum = new HashMap<>();
 		for (Document document : documents) {
 		    String id = (String) document.get("_id");
-		    String documentSeqNum = (String) document.get("DocumentSequenceNumber");
+		    String documentSeqNum = (String) document.get("Header.DocumentSequenceNumber");
 		    if (null == documentSeqNum) {
 		        documentSeqNum = "";
             }
@@ -201,7 +201,7 @@ public class Mongo implements AutoCloseable {
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Document startTimeDoc = new Document("operation",  logMessage).append("time", date).append("session", sessionId);
+        Document startTimeDoc = new Document("operation",  logMessage).append("time", date).append("session", sessionId.toString());
         collection.insertOne(startTimeDoc);
     }
 
@@ -230,13 +230,12 @@ public class Mongo implements AutoCloseable {
         Document sortByOpTypeStage = new Document("$sort", new Document("operation", -1));
         getSessionsPipelineStages.add(sortByOpTypeStage);
 
-        Document groupStage = new Document("$group", new Document("_id", "$sessionId").append("start", new Document("$first", "$start"))
-                                                                                        .append("end", new Document("$first", "$end"))
+        Document groupStage = new Document("$group", new Document("_id", "$session").append("operations", new Document("$push", "$operation"))
                                                                                         .append("startTime", new Document("$first", "$time"))
                                                                                         .append("endTime", new Document("$last", "$time")));
         getSessionsPipelineStages.add(groupStage);
 
-        Document sortByStartTimeInDescendingOrderStage = new Document("$sort", new Document("$startTime", -1));
+        Document sortByStartTimeInDescendingOrderStage = new Document("$sort", new Document("startTime", -1));
         getSessionsPipelineStages.add(sortByStartTimeInDescendingOrderStage);
 
         Document limitToOneSessionStage = new Document("$limit", 1);
@@ -245,9 +244,11 @@ public class Mongo implements AutoCloseable {
         AggregateIterable<Document> sessionsData = collection.aggregate(getSessionsPipelineStages);
         for (Document sessionDataDocument : sessionsData) {
 
-            // If there is no end document, then we know that this session was interrupted
-            if (sessionDataDocument.get("end") == null) {
-                return (UUID) sessionDataDocument.get("sessionId");
+            List<String> operations = (List<String>) sessionDataDocument.get("operations");
+
+            // If there is no end operation, then we know that this session was interrupted
+            if (!operations.contains("end")) {
+                return UUID.fromString( (String) sessionDataDocument.get("_id"));
             }
             break;
         }

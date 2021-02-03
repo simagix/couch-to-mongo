@@ -65,6 +65,7 @@ public class Couch {
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
 			inserted.getAndSet(count) ;
+			fetched.getAndSet(count);
 
 			// Record
 			long startTime2 = System.currentTimeMillis();
@@ -81,6 +82,7 @@ public class Couch {
 
 			logger.info(String.format("found %d documents in CouchDB", result.getSize()));
 			int counter = 0;
+			int docsFetched = 0;
 			String startDocId = null;
 			String endDocId = null;
 
