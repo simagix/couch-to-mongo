@@ -84,6 +84,20 @@ public class Mongo implements AutoCloseable {
 			return 0;
         }
 
+		// Get document sequence numbers
+        logger.info("Getting document sequence numbers");
+		Map<String, String> docIdToSeqNum = new HashMap<>();
+		for (Document document : documents) {
+		    String id = (String) document.get("_id");
+		    String documentSeqNum = (String) document.get("DocumentSequenceNumber");
+		    if (null == documentSeqNum) {
+		        documentSeqNum = "";
+            }
+
+		    logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
+		    docIdToSeqNum.put(id, documentSeqNum );
+        }
+
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
         InsertManyOptions options = new InsertManyOptions();
         options.ordered(false);
@@ -103,7 +117,7 @@ public class Mongo implements AutoCloseable {
                 logger.info(String.format("Successfully inserted %d documents", resultSize));
 
                 if (resultSize > 0) {
-                    insertMetaData(dbName, threadId, res);
+                    insertMetaData(dbName, threadId, res, docIdToSeqNum);
                     break;
                 }
 
@@ -116,7 +130,7 @@ public class Mongo implements AutoCloseable {
 
             } catch (MongoBulkWriteException ex) {
 
-                insertMetaData(dbName, threadId, ex.getWriteResult(), ex.getWriteErrors());
+                insertMetaData(dbName, threadId, ex.getWriteResult(), ex.getWriteErrors(), docIdToSeqNum);
 
                 logger.error("Encountered MongoBulkWriteException: " + ex);
                 logger.error(ex.getMessage());
@@ -298,15 +312,17 @@ public class Mongo implements AutoCloseable {
      * @param threadId
      * @param result
      */
-    private void insertMetaData(String dbName, Long threadId, InsertManyResult result) {
+    private void insertMetaData(String dbName, Long threadId, InsertManyResult result, Map<String, String> idsToSeqNum) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                 .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                 .withWriteConcern(wc);
 
-        Set<BsonValue> insertedIds = new HashSet<>();
+        Set<Document> insertedIds = new HashSet<>();
         for (BsonValue value : result.getInsertedIds().values()) {
-            insertedIds.add(value.asString());
+            String seqNum = idsToSeqNum.get(value.toString());
+            Document insertDoc = new Document("_id", value).append("DocumentSequenceNumber",seqNum);
+            insertedIds.add(insertDoc);
         }
 
         Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
@@ -315,20 +331,28 @@ public class Mongo implements AutoCloseable {
     }
 
     // TODO add thread id and run information
-    private void insertMetaData(String dbName, Long threadId, BulkWriteResult result, Collection<BulkWriteError> errors) {
+    private void insertMetaData(String dbName, Long threadId, BulkWriteResult result, Collection<BulkWriteError> errors, Map<String, String> idsToSeqNum) {
         WriteConcern wc = new WriteConcern(0);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Set<BsonValue> insertedIds = new HashSet<>();
+        Set<Document> insertedIds = new HashSet<>();
         for (BulkWriteInsert bulkWriteInsert : result.getInserts()) {
-            insertedIds.add(bulkWriteInsert.getId());
+            String insertedId = bulkWriteInsert.getId().toString();
+
+            String seqNum = idsToSeqNum.get(insertedId);
+            Document insertDoc = new Document("_id", insertedId).append("DocumentSequenceNumber",seqNum);
+
+            insertedIds.add(insertDoc);
         }
 
-        Set<BsonValue> upsertedIds = new HashSet<>();
+        Set<Document> upsertedIds = new HashSet<>();
         for (BulkWriteUpsert bulkWriteUpsert : result.getUpserts()) {
-            upsertedIds.add(bulkWriteUpsert.getId());
+            String insertedId = bulkWriteUpsert.getId().toString();
+            String seqNum = idsToSeqNum.get(insertedId);
+            Document upsertDoc = new Document("_id", insertedId).append("DocumentSequenceNumber", seqNum);
+            upsertedIds.add(upsertDoc);
         }
 
         Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
