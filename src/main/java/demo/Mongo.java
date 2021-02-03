@@ -88,14 +88,24 @@ public class Mongo implements AutoCloseable {
         logger.info("Getting document sequence numbers");
 		Map<String, String> docIdToSeqNum = new HashMap<>();
 		for (Document document : documents) {
-		    String id = (String) document.get("_id");
-		    String documentSeqNum = (String) document.get("Header.DocumentSequenceNumber");
+            String id = (String) document.get("_id");
+
+		    String documentSeqNum;
+		    Document nestedDoc = (Document) document.get("Header");
+		    if (null == nestedDoc) {
+                docIdToSeqNum.put(id, "");
+                logger.trace(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
+                continue;
+            }
+
+		    documentSeqNum = (String) nestedDoc.get("DocumentSequenceNumber");
 		    if (null == documentSeqNum) {
 		        documentSeqNum = "";
             }
+            docIdToSeqNum.put(id, documentSeqNum );
 
 		    logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
-		    docIdToSeqNum.put(id, documentSeqNum );
+
         }
 
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
