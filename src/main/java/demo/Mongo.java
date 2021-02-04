@@ -369,8 +369,7 @@ public class Mongo implements AutoCloseable {
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Set<Document> insertedIds = new HashSet<>();
-        for (BulkWriteInsert bulkWriteInsert : result.getInserts()) {
+        Set<Document> insertedIds = new HashSet<>();for (BulkWriteInsert bulkWriteInsert : result.getInserts()) {
             String insertedId = bulkWriteInsert.getId().toString();
 
             String seqNum = idsToSeqNum.get(insertedId);
