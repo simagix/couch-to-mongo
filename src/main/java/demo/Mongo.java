@@ -84,29 +84,7 @@ public class Mongo implements AutoCloseable {
 			return 0;
         }
 
-		// Get document sequence numbers
-        logger.info("Getting document sequence numbers");
-		Map<String, String> docIdToSeqNum = new HashMap<>();
-		for (Document document : documents) {
-            String id = (String) document.get("_id");
-
-		    String documentSeqNum;
-		    Document nestedDoc = (Document) document.get("Header");
-		    if (null == nestedDoc) {
-                docIdToSeqNum.put(id, "");
-                logger.trace(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
-                continue;
-            }
-
-		    documentSeqNum = (String) nestedDoc.get("DocumentSequenceNumber");
-		    if (null == documentSeqNum) {
-		        documentSeqNum = "";
-            }
-            docIdToSeqNum.put(id, documentSeqNum );
-
-		    logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
-
-        }
+        Map<String, String> docIdToSeqNum = getDocumentSequenceNums(documents);
 
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
         InsertManyOptions options = new InsertManyOptions();
@@ -213,6 +191,45 @@ public class Mongo implements AutoCloseable {
 
         Document startTimeDoc = new Document("operation",  logMessage).append("time", date).append("session", sessionId.toString());
         collection.insertOne(startTimeDoc);
+    }
+
+    /***
+     * Get Document Sequence Numbers
+     *
+     * Fetches a Map<String, String> representing the DocumentSequenceNumber for each document inserted
+     *
+     * @param documents     A List<Document> containing the documents prior to inserting them into the MongoDB collection
+     * @return              A Map<String, String> representing the DocumentSequenceNumber for each document inserted
+     */
+    private Map<String, String> getDocumentSequenceNums(List<Document> documents) {
+        logger.info("Getting document sequence numbers");
+        Map<String, String> docIdToSeqNum = new HashMap<>();
+
+        try {
+            for (Document document : documents) {
+                String id = (String) document.get("_id");
+
+                String documentSeqNum;
+                Document nestedDoc = (Document) document.get("Header");
+                if (null == nestedDoc) {
+                    docIdToSeqNum.put(id, "");
+                    logger.trace(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
+                    continue;
+                }
+
+                documentSeqNum = (String) nestedDoc.get("DocumentSequenceNumber");
+                if (null == documentSeqNum) {
+                    documentSeqNum = "";
+                }
+                docIdToSeqNum.put(id, documentSeqNum);
+
+                logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
+            }
+        } catch (Exception ex) {
+            logger.error("Encountered error when attempting to fetch ids for documents: " + ex.getMessage());
+            logger.error(ex.toString());
+        }
+        return docIdToSeqNum;
     }
 
     /***
