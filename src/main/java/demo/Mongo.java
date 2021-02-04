@@ -9,6 +9,7 @@ import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.*;
 import com.mongodb.client.model.InsertManyOptions;
 import com.mongodb.client.result.InsertManyResult;
+import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
@@ -349,8 +350,10 @@ public class Mongo implements AutoCloseable {
 
         Set<Document> insertedIds = new HashSet<>();
         for (BsonValue value : result.getInsertedIds().values()) {
-            String seqNum = idsToSeqNum.get(value.toString());
-            Document insertDoc = new Document("_id", value).append("DocumentSequenceNumber",seqNum);
+            String valueString = ((BsonString) value).getValue();
+
+            String seqNum = idsToSeqNum.get(valueString);
+            Document insertDoc = new Document("_id", valueString).append("DocumentSequenceNumber",seqNum);
             insertedIds.add(insertDoc);
         }
 
