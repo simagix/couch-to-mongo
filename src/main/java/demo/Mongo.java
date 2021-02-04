@@ -217,7 +217,7 @@ public class Mongo implements AutoCloseable {
                     continue;
                 }
 
-                documentSeqNum = (String) nestedDoc.get("DocumentSequenceNumber");
+                documentSeqNum = nestedDoc.get("DocumentSequenceNumber").toString();
                 if (null == documentSeqNum) {
                     documentSeqNum = "";
                 }
@@ -226,8 +226,7 @@ public class Mongo implements AutoCloseable {
                 logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
             }
         } catch (Exception ex) {
-            logger.error("Encountered error when attempting to fetch ids for documents: " + ex.getMessage());
-            logger.error(ex.toString());
+            logger.error("Encountered error when attempting to fetch ids for documents: " + ex.getMessage(), ex);
         }
         return docIdToSeqNum;
     }
