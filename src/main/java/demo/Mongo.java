@@ -207,13 +207,15 @@ public class Mongo implements AutoCloseable {
 
         try {
             for (Document document : documents) {
+                logger.trace("Looking for Header field in document " + document);
+
                 String id = (String) document.get("_id");
 
                 String documentSeqNum;
                 Document nestedDoc = (Document) document.get("Header");
                 if (null == nestedDoc) {
                     docIdToSeqNum.put(id, "");
-                    logger.trace(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
+                    logger.debug(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
                     continue;
                 }
 
