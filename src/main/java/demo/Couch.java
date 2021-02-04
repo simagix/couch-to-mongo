@@ -73,6 +73,8 @@ public class Couch {
 			// Get all documents from Couch DB
 			ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
 			ViewResult result = db.queryView(query);
+			mongo.insertMetaDataOperation("completeInitialCouchDBQuery", new Date());
+
 
 			logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
 
