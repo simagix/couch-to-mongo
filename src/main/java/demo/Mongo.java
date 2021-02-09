@@ -7,7 +7,7 @@ import com.mongodb.bulk.BulkWriteInsert;
 import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.*;
-import com.mongodb.client.model.InsertManyOptions;
+import com.mongodb.client.model.*;
 import com.mongodb.client.result.InsertManyResult;
 import org.bson.BsonString;
 import org.bson.BsonValue;
@@ -73,6 +73,84 @@ public class Mongo implements AutoCloseable {
             existingIds = getExistingIds(dbName, collectionName);
         }
         return existingIds.contains(id);
+    }
+
+    public UUID getSessionId() {
+        return sessionId;
+    }
+
+    public int updateDocsInMongo(String dbName, String collectionName, Map<String, Document> idsToDocuments,  Long threadId) {
+        long startTime = System.currentTimeMillis();
+
+        logger.info("Updating documents in mongo");
+        if (idsToDocuments.isEmpty()) {
+            logger.debug("Result set provided is empty. Not inserting.");
+            return 0;
+        }
+
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
+        BulkWriteOptions options = new BulkWriteOptions().ordered(false);
+        UpdateOptions updateOptions = new UpdateOptions().upsert(true);
+
+        Map<String, String> docIdToSeqNum  = getDocumentSequenceNums(idsToDocuments.values());
+        List<UpdateOneModel<Document>> updates = new ArrayList<>();
+        for (String id : idsToDocuments.keySet()) {
+            Document document = idsToDocuments.get(id);
+
+            Document queryDoc = new Document("_id", id);
+            Document updateDoc = new Document("$set", document);
+
+            updates.add(new UpdateOneModel(queryDoc, updateDoc, updateOptions));
+        }
+
+        int resultSize = 0;
+        int numUpdateAttempts = 0;
+
+        while (numUpdateAttempts < MAX_NUM_INSERT_ATTEMPTS) {
+            numUpdateAttempts++;
+            logger.trace(String.format("Making update attempt %d/%d", numUpdateAttempts, MAX_NUM_INSERT_ATTEMPTS));
+            try {
+                String message = String.format("documents size %d", updates.size());
+                logger.info(message);
+
+                BulkWriteResult result = collection.bulkWrite(updates, options);
+                resultSize = result.getModifiedCount() + result.getInsertedCount();
+                logger.info(String.format("Successfully matched %d documents, updated %d documents, and upserted %d documents",
+                                            result.getModifiedCount(), result.getModifiedCount(), result.getInsertedCount()));
+
+                if (resultSize > 0) {
+                    insertMetaData(dbName, threadId, result, docIdToSeqNum);
+                    break;
+                }
+
+            } catch (MongoWriteException ex) {
+
+                logger.error("Encountered MongoWriteException: " + ex);
+                logger.error(ex.getMessage());
+                sleep(2000);
+                continue;
+
+            } catch (MongoBulkWriteException ex) {
+
+                insertMetaData(dbName, threadId, ex.getWriteResult(), ex.getWriteErrors(), docIdToSeqNum);
+
+                logger.error("Encountered MongoBulkWriteException: " + ex);
+                logger.error(ex.getMessage());
+                sleep(2000);
+                break;
+            } catch (Exception ex) {
+
+                logger.error("Encountered exception: " + ex);
+                logger.error(ex.getMessage());
+                break;
+            }
+        }
+
+        // Record time
+        long endTime = System.currentTimeMillis();
+        logger.debug(String.format("updateDocsInMongo() lasted %d mills", endTime - startTime));
+
+        return resultSize;
     }
 
 	public int saveToMongo(String dbName, String collectionName, List<Document> documents, Long threadId) {
@@ -194,6 +272,37 @@ public class Mongo implements AutoCloseable {
         collection.insertOne(startTimeDoc);
     }
 
+    /****
+     * Insert Last Sequence Number
+     *
+     * Inserts the last sequence number (from Couch DB) for a particular migration run, if it doesn't already exist for
+     * the run (as identified by the migration run's session id).
+     *
+     * @param lastSequenceNumber
+     * @param date
+     */
+    public void insertLastSequenceNumber(String lastSequenceNumber, Date date) {
+        if (lastSequenceNumber == null) {
+            logger.info("Received null lastSequenceNumber; cannot proceed to log this.");
+            return;
+        }
+
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
+                                                            .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                                                            .withWriteConcern(wc);
+
+        Document queryDoc = new Document("session", sessionId.toString()).append("lastSequenceNumber", lastSequenceNumber);
+        Document startTimeDoc = new Document("operation",  "logLastSequenceNumber").append("time", date)
+                                                                                    .append("session", sessionId.toString())
+                                                                                    .append("lastSequenceNumber", lastSequenceNumber);
+        Document updateDoc = new Document("$set", startTimeDoc);
+
+        UpdateOptions updateOptions = new UpdateOptions().upsert(true);
+
+        collection.updateOne(queryDoc, updateDoc, updateOptions);
+    }
+
     /***
      * Get Document Sequence Numbers
      *
@@ -202,7 +311,7 @@ public class Mongo implements AutoCloseable {
      * @param documents     A List<Document> containing the documents prior to inserting them into the MongoDB collection
      * @return              A Map<String, String> representing the DocumentSequenceNumber for each document inserted
      */
-    private Map<String, String> getDocumentSequenceNums(List<Document> documents) {
+    private Map<String, String> getDocumentSequenceNums(Collection<Document> documents) {
         logger.info("Getting document sequence numbers");
         Map<String, String> docIdToSeqNum = new HashMap<>();
 
@@ -359,6 +468,26 @@ public class Mongo implements AutoCloseable {
 
         Document metaDataDoc = new Document("time", new Date()).append("insertedIds", insertedIds)
                                                                 .append("threadId", threadId);
+        collection.insertOne(metaDataDoc);
+    }
+
+    private void insertMetaData(String dbName, Long threadId, BulkWriteResult result, Map<String, String> idsToSeqNum) {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
+                .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                .withWriteConcern(wc);
+
+        Set<Document> upsertedIds = new HashSet<>();
+        for (BulkWriteUpsert upsert : result.getUpserts()) {
+            String valueString = ((BsonString) upsert.getId()).getValue();
+
+            String seqNum = idsToSeqNum.get(valueString);
+            Document insertDoc = new Document("_id", valueString).append("DocumentSequenceNumber",seqNum);
+            upsertedIds.add(insertDoc);
+        }
+
+        Document metaDataDoc = new Document("time", new Date()).append("upsertedIds", upsertedIds)
+                .append("threadId", threadId);
         collection.insertOne(metaDataDoc);
     }
 

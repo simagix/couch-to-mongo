@@ -2,13 +2,15 @@
 package demo;
 
 import org.bson.Document;
-import org.ektorp.CouchDbConnector;
-import org.ektorp.CouchDbInstance;
-import org.ektorp.ViewQuery;
-import org.ektorp.ViewResult;
+import org.codehaus.jackson.map.util.JSONPObject;
+import org.ektorp.*;
+import org.ektorp.changes.ChangesCommand;
+import org.ektorp.changes.ChangesFeed;
 import org.ektorp.http.HttpClient;
+import org.ektorp.http.HttpResponse;
 import org.ektorp.http.StdHttpClient;
 import org.ektorp.impl.StdCouchDbInstance;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,7 +51,7 @@ public class Couch {
 		inserted = new AtomicLong(0);
 	}
 
-	public void migrate() throws MalformedURLException, EOFException, InterruptedException {
+	public void migrate(String lastSequenceNum) throws MalformedURLException, EOFException, InterruptedException {
 		long startTime = System.currentTimeMillis();
 
 		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(numThreads);
@@ -70,11 +72,22 @@ public class Couch {
 			// Record
 			long startTime2 = System.currentTimeMillis();
 
+			HttpResponse response = httpClient.get(String.format("/%s/_changes", dbName));
+			JSONObject object = new JSONObject(response.getContent());
+			//			ChangesCommand changesCommand = new ChangesCommand.Builder()
+//															.since(updateSequenceNum)
+//															.build();
+//			ChangesFeed feed =  db.changesFeed(changesCommand);
+//			logger.info("Feed is " + feed);
+
+//			mongo.insertLastSequenceNumber(feed., new Date());
+
+			startTime2 = System.currentTimeMillis();
+
 			// Get all documents from Couch DB
 			ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
 			ViewResult result = db.queryView(query);
 			mongo.insertMetaDataOperation("completeInitialCouchDBQuery", new Date());
-
 
 			logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
 
@@ -189,6 +202,9 @@ public class Couch {
 
 			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
 			mongo.insertMetaDataOperation("end", new Date());
+
+			ChangeFeedClient client = new ChangeFeedClient(lastSequenceNum, mongo, dbName, collectionName, db);
+			client.applyChanges();
 
 		} catch (Exception ex) {
 			ex.printStackTrace();
