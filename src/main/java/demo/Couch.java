@@ -33,6 +33,7 @@ public class Couch {
 
 	private AtomicLong fetched;
 	private AtomicLong shouldInsert;
+	private long initialFetchedFromMongo = 0;
 
 	public Couch(Properties prop) {
 		couchdbURI = prop.getProperty("couchdb.uri");
@@ -64,6 +65,7 @@ public class Couch {
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
 			fetched.getAndSet(count);
+			initialFetchedFromMongo = count;
 
 			// Record
 			long startTime2 = System.currentTimeMillis();
@@ -186,7 +188,7 @@ public class Couch {
 			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
 			long inMongo = mongo.countDocuments(dbName, collectionName);
 
-			long shouldBeInMongo = shouldInsert.get() + fetched.get();
+			long shouldBeInMongo = shouldInsert.get() + initialFetchedFromMongo;
 			while (shouldBeInMongo != inMongo) {
 
 				logger.info(String.format("total of %d fetched, %d in mongo", shouldBeInMongo, inMongo));
