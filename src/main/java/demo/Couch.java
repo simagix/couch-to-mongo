@@ -2,10 +2,7 @@
 package demo;
 
 import org.bson.Document;
-import org.codehaus.jackson.map.util.JSONPObject;
 import org.ektorp.*;
-import org.ektorp.changes.ChangesCommand;
-import org.ektorp.changes.ChangesFeed;
 import org.ektorp.http.HttpClient;
 import org.ektorp.http.HttpResponse;
 import org.ektorp.http.StdHttpClient;
@@ -35,7 +32,7 @@ public class Couch {
 
 
 	private AtomicLong fetched;
-	private AtomicLong inserted;
+	private AtomicLong shouldInsert;
 
 	public Couch(Properties prop) {
 		couchdbURI = prop.getProperty("couchdb.uri");
@@ -48,7 +45,7 @@ public class Couch {
 		collectionName = prop.getProperty("source_collection_name");
 
 		fetched = new AtomicLong(0);
-		inserted = new AtomicLong(0);
+		shouldInsert = new AtomicLong(0);
 	}
 
 	public void migrate(String lastSequenceNum) throws MalformedURLException, EOFException, InterruptedException {
@@ -66,7 +63,7 @@ public class Couch {
 		Mongo mongo = new Mongo(mongodbURI, dbName);
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
-			inserted.getAndSet(count) ;
+			shouldInsert.getAndSet(count);
 			fetched.getAndSet(count);
 
 			// Record
@@ -147,7 +144,7 @@ public class Couch {
 						logger.info(String.format("Thread %d finished ", id));
 					});
 
-					logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched.get(), inserted.get()));
+					logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
 					counter = 0;
 					while (executor.getQueue().size() > numThreads) {
 						logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
@@ -186,10 +183,10 @@ public class Couch {
 				});
 			}
 
-			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), inserted.get()));
+			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
 			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
 			long inMongo = mongo.countDocuments(dbName, collectionName);
-			while (fetched.get() != inMongo) {
+			while (shouldInsert.get() != inMongo) {
 
 				logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 				Thread.sleep(5000);
@@ -237,7 +234,7 @@ public class Couch {
 				String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 				logger.info(message);
 
-				inserted.addAndGet(saved);
+				shouldInsert.addAndGet(saved);
 				documents = new ArrayList<>();
 			}
 		}
@@ -246,7 +243,7 @@ public class Couch {
 			String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
 			logger.info(message);
 
-			inserted.addAndGet(saved);
+			shouldInsert.addAndGet(saved);
 		}
 
 		logger.debug(String.format("Returning from processViewResults on thread %d", id));
