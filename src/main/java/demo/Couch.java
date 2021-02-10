@@ -200,11 +200,11 @@ public class Couch {
 			inMongo = mongo.countDocuments(dbName, collectionName);
 			logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
 
-			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
-			mongo.insertMetaDataOperation("end", new Date());
-
 			ChangeFeedClient client = new ChangeFeedClient(lastSequenceNum, mongo, dbName, collectionName, db);
 			client.applyChanges();
+
+			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
+			mongo.insertMetaDataOperation("end", new Date());
 
 		} catch (Exception ex) {
 			ex.printStackTrace();
