@@ -293,7 +293,8 @@ public class Mongo implements AutoCloseable {
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Document queryDoc = new Document("session", sessionId.toString()).append("lastSequenceNumber", new Document("$ne", lastSequenceNumber));
+        Document queryDoc = new Document("session", sessionId.toString()).append("operation", "logLastSequenceNumber")
+                                                                    .append("lastSequenceNumber", new Document("$ne", lastSequenceNumber));
         Document startTimeDoc = new Document("operation",  "logLastSequenceNumber").append("time", date)
                                                                                     .append("session", sessionId.toString())
                                                                                     .append("lastSequenceNumber", lastSequenceNumber);

@@ -96,6 +96,8 @@ public class Couch {
 	 * @throws EOFException
 	 */
 	private ViewResult getInitialCouchDBDocuments(CouchDbConnector couchDB) throws EOFException {
+		logger.info("Sending initial query to CouchDB to get the set of document ids");
+
 		// Record
 		long startTime2 = System.currentTimeMillis();
 
