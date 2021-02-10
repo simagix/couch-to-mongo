@@ -9,6 +9,7 @@ import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.InsertManyResult;
+import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
@@ -287,12 +288,12 @@ public class Mongo implements AutoCloseable {
             return;
         }
 
-        WriteConcern wc = new WriteConcern(0);
+        WriteConcern wc = new WriteConcern(1);
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
                                                             .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
                                                             .withWriteConcern(wc);
 
-        Document queryDoc = new Document("session", sessionId.toString());
+        Document queryDoc = new Document("session", sessionId.toString()).append("lastSequenceNumber", new Document("$ne", lastSequenceNumber));
         Document startTimeDoc = new Document("operation",  "logLastSequenceNumber").append("time", date)
                                                                                     .append("session", sessionId.toString())
                                                                                     .append("lastSequenceNumber", lastSequenceNumber);
@@ -300,7 +301,10 @@ public class Mongo implements AutoCloseable {
 
         UpdateOptions updateOptions = new UpdateOptions().upsert(true);
 
-        collection.updateOne(queryDoc, updateDoc, updateOptions);
+        UpdateResult updateResult = collection.updateOne(queryDoc, updateDoc, updateOptions);
+        if (updateResult.getModifiedCount() > 0 ) {
+            logger.debug("Persisting last sequence number to " + lastSequenceNumber);
+        }
     }
 
     public String getLastSequenceNumber() {
@@ -340,20 +344,19 @@ public class Mongo implements AutoCloseable {
                 String id = (String) document.get("_id");
 
                 String documentSeqNum;
-                Document nestedDoc = (Document) document.get("Header");
-                if (null == nestedDoc) {
-                    docIdToSeqNum.put(id, "");
-                    logger.debug(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
-                    continue;
-                }
 
-                Long docSeqNum = nestedDoc.getDouble("DocumentSequenceNumber").longValue();
-                documentSeqNum = docSeqNum.toString();
-                if (null == documentSeqNum) {
+                try {
+                    Document nestedDoc = (Document) document.get("Header");
+                    Double docSeqNumDouble = nestedDoc.getDouble("DocumentSequenceNumber");
+                    Long docSeqNum = docSeqNumDouble.longValue();
+                    documentSeqNum = docSeqNum.toString();
+
+                } catch (Exception ex) {
+                    logger.debug(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
                     documentSeqNum = "";
                 }
-                docIdToSeqNum.put(id, documentSeqNum);
 
+                docIdToSeqNum.put(id, documentSeqNum);
                 logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
             }
         } catch (Exception ex) {

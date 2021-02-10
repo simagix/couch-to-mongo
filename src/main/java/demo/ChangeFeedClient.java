@@ -88,7 +88,6 @@ public class ChangeFeedClient {
     }
 
     private void logLastSequenceNumber() {
-        logger.debug("Persisting last sequence number to " + lastSequenceNumber);
         mongo.insertLastSequenceNumber(lastSequenceNumber, new Date());
     }
 

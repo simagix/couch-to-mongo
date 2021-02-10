@@ -56,123 +56,113 @@ public class Couch {
 		HttpClient httpClient = new StdHttpClient.Builder().url(couchdbURI).connectionTimeout(timeout)
 				.socketTimeout(timeout).build();
 		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
-		CouchDbConnector db = dbInstance.createConnector(dbName, true);
-
-		// Get a UUID for this session
-
+		CouchDbConnector couchDB = dbInstance.createConnector(dbName, true);
 
 		Mongo mongo = new Mongo(mongodbURI, dbName);
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
-			fetched.getAndSet(count);
 			initialFetchedFromMongo = count;
 
-			// Record
-			long startTime2 = System.currentTimeMillis();
-
-			HttpResponse response = httpClient.get(String.format("/%s/_changes", dbName));
-			JSONObject object = new JSONObject(response.getContent());
-			//			ChangesCommand changesCommand = new ChangesCommand.Builder()
-//															.since(updateSequenceNum)
-//															.build();
-//			ChangesFeed feed =  db.changesFeed(changesCommand);
-//			logger.info("Feed is " + feed);
-
-//			mongo.insertLastSequenceNumber(feed., new Date());
-
-			startTime2 = System.currentTimeMillis();
-
-			// Get all documents from Couch DB
-			ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
-			ViewResult result = db.queryView(query);
+			// Get initial document ids from couch db
+			ViewResult result = getInitialCouchDBDocuments(couchDB);
 			mongo.insertMetaDataOperation("completeInitialCouchDBQuery", new Date());
 
-			logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
+			// Process the documents in our pool threads
+			insertDataIntoMongo(executor, mongo, couchDB, result);
 
-			if (result.isEmpty()) {
-				throw new EOFException("no document found");
+			// Wait for records to migrate
+			waitForCompletion(executor, result.getSize(), mongo);
+			mongo.insertMetaDataOperation("end", new Date());
+
+			long inMongo = mongo.countDocuments(dbName, collectionName);
+			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
+
+			// Start the Change feed processing
+			ChangeFeedClient client = new ChangeFeedClient(lastSequenceNum, mongo, dbName, collectionName, couchDB);
+			client.applyChanges();
+
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		}
+	}
+
+	/***
+	 * Get Initial Couch DB Documents
+	 *
+	 * Fetches ids for all the documents from CouchDB in the database connection
+	 *
+	 * @param couchDB
+	 * @return
+	 * @throws EOFException
+	 */
+	private ViewResult getInitialCouchDBDocuments(CouchDbConnector couchDB) throws EOFException {
+		// Record
+		long startTime2 = System.currentTimeMillis();
+
+		// Get all documents from Couch DB
+		ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
+		ViewResult result = couchDB.queryView(query);
+		logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
+
+		logger.info(String.format("found %d documents in CouchDB", result.getSize()));
+
+		if (result.isEmpty()) {
+			throw new EOFException("no document found");
+		}
+		return result;
+	}
+
+	/***
+	 * Insert Data Into Mongo
+	 *
+	 * @param executor
+	 * @param mongo
+	 * @param couchDB
+	 * @param initialDocumentsResult
+	 * @throws InterruptedException
+	 */
+	private void insertDataIntoMongo(ThreadPoolExecutor executor, Mongo mongo, CouchDbConnector couchDB, ViewResult initialDocumentsResult) throws InterruptedException {
+
+		int counter = 0;
+		int docsFetched = 0;
+		String startDocId = null;
+		String endDocId = null;
+
+		// Divide into batches
+		for (ViewResult.Row row : initialDocumentsResult.getRows()) {
+
+			if (mongo.mongoContainsId(dbName, collectionName, row.getId())) {
+				logger.debug(String.format("Id %s already been migrated to MongoDB. Skipping...", row.getId()));
+				continue;
 			}
 
-			logger.info(String.format("found %d documents in CouchDB", result.getSize()));
-			int counter = 0;
-			int docsFetched = 0;
-			String startDocId = null;
-			String endDocId = null;
-
-			// Divide into batches
-			for (ViewResult.Row row : result.getRows()) {
-
-				if (mongo.mongoContainsId(dbName, collectionName, row.getId())) {
-					logger.debug(String.format("Id %s already been migrated to MongoDB. Skipping...", row.getId()));
-					continue;
-				}
-
+			counter++;
+			endDocId = row.getId();
+			if (counter == 1) {
+				startDocId = row.getId();
 				counter++;
-				endDocId = row.getId();
-				if (counter == 1) {
-					startDocId = row.getId();
-					counter++;
-				} else if (counter == couchBatchSize) {
-
-					final String startDocumentId = startDocId;
-					final String endDocumentId = endDocId;
-
-					executor.submit(() -> {
-
-						// Record
-						long startTime3 = System.currentTimeMillis();
-
-						// Get documents from Couch DB
-						ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
-								.inclusiveEnd(true);
-						ViewResult res = db.queryView(q);
-						logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
-								System.currentTimeMillis() - startTime3,
-								startDocumentId,
-								endDocumentId));
-
-						// Record
-						startTime3 = System.currentTimeMillis();
-						fetched.addAndGet(res.getSize());
-
-						logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
-
-						long id = Thread.currentThread().getId() % numThreads;
-						logger.info(String.format("Starting thread with id %d", id));
-
-						processViewResults(res, mongo, id);
-
-						logger.info(String.format("Thread %d finished ", id));
-					});
-
-					logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
-					counter = 0;
-					while (executor.getQueue().size() > numThreads) {
-						logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
-						Thread.sleep(5000);	// throttle and yield
-					}
-				}
-			}
-
-			// Insert remaining docs
-			if (counter > 0) {
+			} else if (counter == couchBatchSize) {
 
 				final String startDocumentId = startDocId;
 				final String endDocumentId = endDocId;
 
 				executor.submit(() -> {
+
+					// Record
 					long startTime3 = System.currentTimeMillis();
 
+					// Get documents from Couch DB
 					ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
 							.inclusiveEnd(true);
-					ViewResult res = db.queryView(q);
+					ViewResult res = couchDB.queryView(q);
 					logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
 							System.currentTimeMillis() - startTime3,
 							startDocumentId,
 							endDocumentId));
 
+					// Record
 					startTime3 = System.currentTimeMillis();
-					fetched.addAndGet(res.getSize());
+
 					logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
 
 					long id = Thread.currentThread().getId() % numThreads;
@@ -182,33 +172,73 @@ public class Couch {
 
 					logger.info(String.format("Thread %d finished ", id));
 				});
+
+				// Need to log this to understand how far behind we are and if the migration client cannot keep up with the load
+				logger.info(String.format("fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
+
+				counter = 0;
+				while (executor.getQueue().size() > numThreads) {
+					logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
+					Thread.sleep(5000);    // throttle and yield
+				}
 			}
-
-			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
-			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
-			long inMongo = mongo.countDocuments(dbName, collectionName);
-
-			long shouldBeInMongo = shouldInsert.get() + initialFetchedFromMongo;
-			while (shouldBeInMongo != inMongo) {
-
-				logger.info(String.format("total of %d fetched, %d in mongo", shouldBeInMongo, inMongo));
-				Thread.sleep(5000);
-				inMongo = mongo.countDocuments(dbName, collectionName);
-			}
-			executor.shutdown();
-			executor.awaitTermination(5, TimeUnit.SECONDS);
-			inMongo = mongo.countDocuments(dbName, collectionName);
-			logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
-
-			logger.debug(String.format("migrate() spent %d millis total migrating %d documents", System.currentTimeMillis() - startTime, inMongo));
-			mongo.insertMetaDataOperation("end", new Date());
-
-			ChangeFeedClient client = new ChangeFeedClient(lastSequenceNum, mongo, dbName, collectionName, db);
-			client.applyChanges();
-
-		} catch (Exception ex) {
-			ex.printStackTrace();
 		}
+
+		// Insert remaining docs
+		if (counter > 0) {
+
+			final String startDocumentId = startDocId;
+			final String endDocumentId = endDocId;
+
+			executor.submit(() -> {
+				long startTime3 = System.currentTimeMillis();
+
+				ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
+						.inclusiveEnd(true);
+				ViewResult res = couchDB.queryView(q);
+				logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
+						System.currentTimeMillis() - startTime3,
+						startDocumentId,
+						endDocumentId));
+
+				startTime3 = System.currentTimeMillis();
+				logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
+
+				long id = Thread.currentThread().getId() % numThreads;
+				logger.info(String.format("Starting thread with id %d", id));
+
+				processViewResults(res, mongo, id);
+
+				logger.info(String.format("Thread %d finished ", id));
+			});
+		}
+
+		// Need to log this to understand how far behind we are and if the migration client cannot keep up with the load
+		logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
+		logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
+	}
+
+	/***
+	 * Wait for Completion
+	 *
+	 * Waits for the appropriate number of documents to be in MongoDB before forcibly closing the executor thread pool
+	 *
+	 * @param executor
+	 * @param mongo
+	 * @throws InterruptedException
+	 */
+	private void waitForCompletion(ThreadPoolExecutor executor, int numCouchdbDocs, Mongo mongo) throws InterruptedException {
+
+		long inMongo = mongo.countDocuments(dbName, collectionName);
+
+		while (numCouchdbDocs != inMongo) {
+
+			logger.info(String.format("total of %d fetched, %d in mongo", numCouchdbDocs, inMongo));
+			Thread.sleep(5000);
+			inMongo = mongo.countDocuments(dbName, collectionName);
+		}
+		executor.shutdown();
+		executor.awaitTermination(5, TimeUnit.SECONDS);
 	}
 
 	/***
@@ -230,6 +260,7 @@ public class Couch {
 				logger.debug(String.format("Id %s already been migrated to MongoDB. Not processing the document from Couch DB...", row.getId()));
 				continue;
 			}
+			fetched.addAndGet(1);
 
 			documents.add(Document.parse(row.getDoc()));
 			if ((++i) % mongoBatchSize == 0) {
