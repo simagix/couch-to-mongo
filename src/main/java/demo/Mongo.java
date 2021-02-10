@@ -347,7 +347,7 @@ public class Mongo implements AutoCloseable {
                     continue;
                 }
 
-                Integer docSeqNum = (Integer) nestedDoc.get("DocumentSequenceNumber");
+                Integer docSeqNum = nestedDoc.getDouble("DocumentSequenceNumber").intValue();
                 documentSeqNum = docSeqNum.toString();
                 if (null == documentSeqNum) {
                     documentSeqNum = "";
