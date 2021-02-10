@@ -63,7 +63,6 @@ public class Couch {
 		Mongo mongo = new Mongo(mongodbURI, dbName);
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
-			shouldInsert.getAndSet(count);
 			fetched.getAndSet(count);
 
 			// Record
@@ -186,9 +185,11 @@ public class Couch {
 			logger.info(String.format("end of fetching, total of %d fetched, %d inserted", fetched.get(), shouldInsert.get()));
 			logger.info(String.format("last batch start key: %s, end key: %s", startDocId, endDocId));
 			long inMongo = mongo.countDocuments(dbName, collectionName);
-			while (shouldInsert.get() != inMongo) {
 
-				logger.info(String.format("total of %d fetched, %d in mongo", fetched.get(), inMongo));
+			long shouldBeInMongo = shouldInsert.get() + fetched.get();
+			while (shouldBeInMongo != inMongo) {
+
+				logger.info(String.format("total of %d fetched, %d in mongo", shouldBeInMongo, inMongo));
 				Thread.sleep(5000);
 				inMongo = mongo.countDocuments(dbName, collectionName);
 			}
