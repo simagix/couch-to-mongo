@@ -36,6 +36,13 @@ public class ChangeFeedClient {
         this.mongo = mongo;
         this.sessionId = mongo.getSessionId();
         this.lastSequenceNumber = lastSequenceNumber;
+        if (lastSequenceNumber == null) {
+            this.lastSequenceNumber = mongo.getLastSequenceNumber();
+            logger.info(String.format("Last Sequence number is null, fetched new last sequence number of %s from MongoDB", lastSequenceNumber));
+        } else {
+            logger.debug(String.format("Inserting last sequence number of %s in MongoDB", lastSequenceNumber));
+            mongo.insertLastSequenceNumber(lastSequenceNumber, new Date());
+        }
 
         this.dbName = dbName;
         this.collectionName = collectionName;
@@ -62,6 +69,9 @@ public class ChangeFeedClient {
         } catch (InterruptedException ex ) {
             logger.error(String.format("Encountered exception when sleeping for %d millis: " + ex, NUM_SECS*1000));
             logger.error(ex.getMessage());
+        } finally {
+            logger.debug("Persisting last sequence number to " + lastSequenceNumber);
+            mongo.insertLastSequenceNumber(lastSequenceNumber, new Date());
         }
     }
 
@@ -99,7 +109,7 @@ public class ChangeFeedClient {
             }
 
             if (changedDocs.size() % BATCH_SIZE == 0) {
-                logger.debug(String.format("Processing batch of %d upodates/inserts", changedDocs.size()));
+                logger.debug(String.format("Processing batch of %d updates/inserts", changedDocs.size()));
                 mongo.updateDocsInMongo(dbName, collectionName, changedDocs, threadId);
                 changedDocs = new HashSet<>();
             }

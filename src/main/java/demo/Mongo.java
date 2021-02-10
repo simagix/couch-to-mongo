@@ -303,6 +303,24 @@ public class Mongo implements AutoCloseable {
         collection.updateOne(queryDoc, updateDoc, updateOptions);
     }
 
+    public String getLastSequenceNumber() {
+        WriteConcern wc = new WriteConcern(0);
+        MongoCollection<Document> collection = mongoClient.getDatabase(dbName)
+                .getCollection(MIGRATION_COLLECTION_METADATA_NAME)
+                .withWriteConcern(wc);
+
+
+        Document queryDoc = new Document("operation", "logLastSequenceNumber");
+        Document sortDoc = new Document("time", -1);
+
+        FindIterable<Document> cursor = collection.find(queryDoc).sort(sortDoc).limit(1);
+        for (Document document : cursor) {
+            String sequenceNumber = document.getString("lastSequenceNumber");
+            return sequenceNumber;
+        }
+        return "NO_SEQUENCE_NUMBER_FOUND";
+    }
+
     /***
      * Get Document Sequence Numbers
      *
