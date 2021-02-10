@@ -56,6 +56,9 @@ public class ChangeFeedClient {
 
         final int NUM_SECS = 5;
 
+        Thread logLastSequenceNumShutdownHook = new Thread(() -> logLastSequenceNumber());
+        Runtime.getRuntime().addShutdownHook(logLastSequenceNumShutdownHook);
+
         try {
             while (true) {
 
@@ -63,15 +66,14 @@ public class ChangeFeedClient {
                 Set<String> changedIds = getChangeIdsFromChangeFeed();
                 insertDataIntoMongo(changedIds);
 
+                logLastSequenceNumber();
+
                 logger.info(String.format("All caught up. Waiting %ds for more changes. Terminate at any time", NUM_SECS));
                 Thread.sleep(NUM_SECS*1000);
             }
         } catch (InterruptedException ex ) {
             logger.error(String.format("Encountered exception when sleeping for %d millis: " + ex, NUM_SECS*1000));
             logger.error(ex.getMessage());
-        } finally {
-            logger.debug("Persisting last sequence number to " + lastSequenceNumber);
-            mongo.insertLastSequenceNumber(lastSequenceNumber, new Date());
         }
     }
 
@@ -83,6 +85,11 @@ public class ChangeFeedClient {
             return Document.parse(row.getDoc());
         }
         return null;
+    }
+
+    private void logLastSequenceNumber() {
+        logger.debug("Persisting last sequence number to " + lastSequenceNumber);
+        mongo.insertLastSequenceNumber(lastSequenceNumber, new Date());
     }
 
     /***
