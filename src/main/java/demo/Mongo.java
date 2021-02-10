@@ -79,11 +79,11 @@ public class Mongo implements AutoCloseable {
         return sessionId;
     }
 
-    public int updateDocsInMongo(String dbName, String collectionName, Map<String, Document> idsToDocuments,  Long threadId) {
+    public int updateDocsInMongo(String dbName, String collectionName, Set<Document> documents,  Long threadId) {
         long startTime = System.currentTimeMillis();
 
         logger.info("Updating documents in mongo");
-        if (idsToDocuments.isEmpty()) {
+        if (documents.isEmpty()) {
             logger.debug("Result set provided is empty. Not inserting.");
             return 0;
         }
@@ -92,11 +92,11 @@ public class Mongo implements AutoCloseable {
         BulkWriteOptions options = new BulkWriteOptions().ordered(false);
         UpdateOptions updateOptions = new UpdateOptions().upsert(true);
 
-        Map<String, String> docIdToSeqNum  = getDocumentSequenceNums(idsToDocuments.values());
+        Map<String, String> docIdToSeqNum  = getDocumentSequenceNums(documents);
         List<UpdateOneModel<Document>> updates = new ArrayList<>();
-        for (String id : idsToDocuments.keySet()) {
-            Document document = idsToDocuments.get(id);
+        for (Document document : documents) {
 
+            String id = document.get("_id").toString();
             Document queryDoc = new Document("_id", id);
             Document updateDoc = new Document("$set", document);
 

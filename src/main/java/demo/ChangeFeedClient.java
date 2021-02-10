@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 
+import javax.print.Doc;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,6 +22,7 @@ public class ChangeFeedClient {
     private static Logger logger = LoggerFactory.getLogger(ChangeFeedClient.class);
 
     private final String NO_SEQUENCE_NUMBER_FOUND = "NO_SEQUENCE_NUMBER_FOUND";
+    private final int BATCH_SIZE = 100;
 
     private UUID sessionId;
     private String lastSequenceNumber;
@@ -51,39 +53,8 @@ public class ChangeFeedClient {
             while (true) {
 
                 logger.info("Checking change feed for latest changes...");
-                ChangesCommand changesCommand = new ChangesCommand.Builder().since(lastSequenceNumber)
-                                                                            .includeDocs(true)
-                                                                            .build();
-                List<DocumentChange> changeFeed = couchDB.changes(changesCommand);
-
-                // Coalesce updates per document via a map
-                Map<String, Document> changes = new HashMap();
-                for (DocumentChange change : changeFeed) {
-
-                    String docId = change.getId();
-
-                    String sequenceNum = getSequenceNumber(change);
-                    if (NO_SEQUENCE_NUMBER_FOUND.equals(sequenceNum)) {
-                        logger.error("Could not find a sequence number for document with id " + docId);
-                        continue;
-                    }
-                    lastSequenceNumber = sequenceNum.replace("\"","");
-
-
-                    logger.debug("Adding change document with id " + docId);
-//                    Document document = getDocumentForId(docId);
-                    Document document = Document.parse(change.getDoc());
-                    if (null == document) {
-                        logger.error("Could not find a document in CouchDB with id " + docId);
-                        continue;
-                    }
-
-                    changes.put(change.getId(), document);
-                }
-
-                logger.info(String.format("Processing %d changes", changes.size()));
-                long threadId = Thread.currentThread().getId();
-                mongo.updateDocsInMongo(dbName, collectionName, changes, threadId);
+                Set<String> changedIds = getChangeIdsFromChangeFeed();
+                insertDataIntoMongo(changedIds);
 
                 logger.info(String.format("All caught up. Waiting %ds for more changes. Terminate at any time", NUM_SECS));
                 Thread.sleep(NUM_SECS*1000);
@@ -104,7 +75,67 @@ public class ChangeFeedClient {
         return null;
     }
 
+    /***
+     * Insert Data Into Mongo
+     *
+     *
+     *
+     * @param changedIds
+     */
+    private void insertDataIntoMongo(Set<String> changedIds) {
+        logger.info(String.format("Processing %d changes", changedIds.size()));
+        long threadId = Thread.currentThread().getId();
 
+        Set<Document>  changedDocs = new HashSet<>();
+        for (String changeDocId : changedIds) {
+
+            ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(changeDocId).endDocId(changeDocId)
+                                                    .inclusiveEnd(true);
+            ViewResult result = couchDB.queryView(q);
+            for (ViewResult.Row row : result.getRows()) {
+                Document document = Document.parse(row.getDoc());
+                logger.debug("Adding doc with id " + document.get("_id").toString() + ": " + row.getDoc());
+                changedDocs.add(document);
+            }
+
+            if (changedDocs.size() % BATCH_SIZE == 0) {
+                logger.debug(String.format("Processing batch of %d upodates/inserts", changedDocs.size()));
+                mongo.updateDocsInMongo(dbName, collectionName, changedDocs, threadId);
+                changedDocs = new HashSet<>();
+            }
+        }
+
+        // Process remaining documents
+        if (changedDocs.size() > 0 ) {
+            logger.debug(String.format("Processing batch of %d upodates/inserts", changedDocs.size()));
+            mongo.updateDocsInMongo(dbName, collectionName, changedDocs, threadId);
+        }
+    }
+
+    private Set<String> getChangeIdsFromChangeFeed() {
+        ChangesCommand changesCommand = new ChangesCommand.Builder().since(lastSequenceNumber)
+                .includeDocs(true)
+                .build();
+        List<DocumentChange> changeFeed = couchDB.changes(changesCommand);
+
+        // Coalesce updates per document via a map
+        Set<String> changedIds = new HashSet<>();
+        for (DocumentChange change : changeFeed) {
+
+            String docId = change.getId();
+
+            String sequenceNum = getSequenceNumber(change);
+            if (NO_SEQUENCE_NUMBER_FOUND.equals(sequenceNum)) {
+                logger.error("Could not find a sequence number for document with id " + docId);
+                continue;
+            }
+            lastSequenceNumber = sequenceNum.replace("\"","");
+
+            logger.debug("Adding change for id " + docId);
+            changedIds.add(docId);
+        }
+        return changedIds;
+    }
 
     /***
      *
