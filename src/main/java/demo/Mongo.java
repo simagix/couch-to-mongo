@@ -62,10 +62,12 @@ public class Mongo implements AutoCloseable {
     /***
      * Mongo Contains Id
      *
-     * @param dbName
-     * @param collectionName
-     * @param id
-     * @return
+     * Checks if a given document id already exists in Mongo (and thus was already migrated).
+     *
+     * @param dbName                A String representing the database to check in
+     * @param collectionName        A String representing the collection to check in
+     * @param id                    A String representing the id whose presence to check
+     * @return                      true if the id is present in the designated MongoDB namespace, false otherwise
      */
     public boolean mongoContainsId(String dbName, String collectionName, String id) {
         // Lazily initialize
@@ -76,6 +78,13 @@ public class Mongo implements AutoCloseable {
         return existingIds.contains(id);
     }
 
+    /***
+     * Get UUID Session Id
+     *
+     * Gets the UUID for the session for this migration run
+     *
+     * @return  A UUID
+     */
     public UUID getSessionId() {
         return sessionId;
     }
