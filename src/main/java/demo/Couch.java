@@ -81,10 +81,10 @@ public class Couch {
 //			mongo.insertMetaDataOperation("completeInitialCouchDBQuery", new Date());
 
 			// Process the documents in our pool threads
-			long numMigrating = migrateInBatches(executor, mongo, couchDB, partitions);
+			long numReadFromCouch = migrateInBatches(executor, mongo, couchDB, partitions);
 
 			// Wait for records to migrate
-			waitForCompletion(executor, numMigrating, mongo);
+			waitForCompletion(executor, numReadFromCouch, mongo);
 			mongo.insertMetaDataOperation("end", new Date());
 
 			long inMongo = mongo.countDocuments(dbName, collectionName);
@@ -266,7 +266,7 @@ public class Couch {
 	private long migrateInBatches(ThreadPoolExecutor executor, Mongo mongo, CouchDbConnector couchDB, SortedMap<String, KeySpacePartition> partitionMap) {
 		logger.info("Migrating data in batches based on partitions...");
 
-		AtomicLong numMigrating = new AtomicLong(0);
+		AtomicLong numRead = new AtomicLong(0);
 
 		for (String minKey : partitionMap.keySet()) {
 
@@ -274,8 +274,8 @@ public class Couch {
 
 			logger.info(String.format("Creating migration batch for key range [%s,%s)", partition.getMinKey(), partition.getMaxKey()));
 			executor.submit(() -> {
-				int migrating = fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
-				numMigrating.addAndGet(migrating);
+				int numReadFromCouch = fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
+				numRead.addAndGet(numReadFromCouch);
 			});
 
 			while (executor.getQueue().size() > numThreads) {
@@ -288,7 +288,7 @@ public class Couch {
 			}
 		}
 
-		return numMigrating.get();
+		return numRead.get();
 	}
 
 	/***
@@ -413,10 +413,10 @@ public class Couch {
 		long id = Thread.currentThread().getId() % numThreads;
 		logger.info(String.format("Starting thread with id %d", id));
 
-		int numShouldMigrate = processViewResults(res, mongo, id);
+		processViewResults(res, mongo, id);
 		logger.info(String.format("Thread %d finished ", id));
 
-		return numShouldMigrate;
+		return res.getSize();
 	}
 
 	/***
