@@ -400,8 +400,10 @@ public class Couch {
 		ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
 				.inclusiveEnd(false);
 		ViewResult res = couchDB.queryView(q);
-		logger.debug(String.format("migrate() spent %d millis running query to retrieve docs between start id %s and end id %s from couchbase",
+		int resultSize = res.getSize();
+		logger.debug(String.format("migrate() spent %d millis running query to retrieve %d docs between start id %s and end id %s from couchbase",
 				System.currentTimeMillis() - startTime3,
+				resultSize,
 				startDocumentId,
 				endDocumentId));
 
@@ -416,7 +418,7 @@ public class Couch {
 		processViewResults(res, mongo, id);
 		logger.info(String.format("Thread %d finished ", id));
 
-		return res.getSize();
+		return resultSize;
 	}
 
 	/***
