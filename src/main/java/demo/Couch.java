@@ -76,6 +76,8 @@ public class Couch {
 			long count = mongo.countDocuments(dbName, collectionName);
 			initialFetchedFromMongo = count;
 
+//			getSetDifference(couchDB, mongo, dbName, collectionName);
+
 			// Get partitions
 			String minCouchDBKey = getMinKeyValue(couchDB);
 			String maxCouchDBKey = getMaxKeyValue(couchDB);
@@ -98,6 +100,49 @@ public class Couch {
 
 		} catch (Exception ex) {
 			ex.printStackTrace();
+		}
+	}
+
+	/***
+	 *
+	 * @param couch
+	 * @param mongo
+	 * @param dbName
+	 * @param collectionName
+	 */
+	@Deprecated
+	private void getSetDifference(CouchDbConnector couch, Mongo mongo, String dbName, String collectionName) {
+		try {
+			Set<String> idsNotInMongo = new HashSet<>();
+			ViewResult result = getInitialCouchDBDocuments(couch);
+
+			int numExceptions = 0;
+			for (ViewResult.Row row : result.getRows()) {
+				try {
+					String docStr = row.getDoc();
+					Document doc = Document.parse(docStr);
+					String docId = doc.getString("_id");
+
+					if (!mongo.mongoContainsId(dbName, collectionName, docId)) {
+						idsNotInMongo.add(docId);
+					}
+				} catch (Exception exception) {
+					numExceptions++;
+					logger.error("Encountered exception " + exception);
+					logger.error(exception.getMessage());
+					continue;
+				}
+
+			}
+
+			logger.debug("Ids not in mongo:");
+			for (String id : idsNotInMongo) {
+				logger.debug(id);
+			}
+
+		} catch (Exception ex) {
+			logger.error("Encountered exception " + ex);
+			logger.error(ex.getMessage());
 		}
 	}
 
@@ -244,7 +289,7 @@ public class Couch {
 		long startTime2 = System.currentTimeMillis();
 
 		// Get all documents from Couch DB
-		ViewQuery query = new ViewQuery().allDocs().includeDocs(false);
+		ViewQuery query = new ViewQuery().allDocs().includeDocs(true);
 		ViewResult result = couchDB.queryView(query);
 		logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
 
@@ -277,7 +322,10 @@ public class Couch {
 
 			logger.info(String.format("Creating migration batch for key range [%s,%s)", partition.getMinKey(), partition.getMaxKey()));
 			executor.submit(() -> {
+				long id = Thread.currentThread().getId() % numThreads;
+				logger.debug(String.format("Starting thread with id %d", id));
 				fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
+				logger.debug(String.format("Thread %d finished ", id));
 			});
 
 			while (executor.getQueue().size() > numThreads) {
@@ -392,8 +440,6 @@ public class Couch {
 	 */
 	private void fetchFromCouchDBAndMigrate(String startDocumentId, String endDocumentId, CouchDbConnector couchDB, Mongo mongo) {
 		long id = Thread.currentThread().getId() % numThreads;
-		logger.debug(String.format("Starting thread with id %d", id));
-
 		logger.debug("Fetching data from CouchDB and migrating");
 
 		// Record
@@ -403,19 +449,15 @@ public class Couch {
 		ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
 				.inclusiveEnd(false);
 		ViewResult res = couchDB.queryView(q);
-		int resultSize = res.getSize();
 
-		// TODO remove
-//		Long startDocumentIdLong = Long.parseLong(startDocumentId);
-//		Long endDocumentIdLong = Long.parseLong(endDocumentId);
+		// Do not double-count rows
+		int resultSize = 0;
 		for (ViewResult.Row row : res.getRows()) {
-//			if (!isDocumentOutsideRange(row, startDocumentIdLong, endDocumentIdLong)) {
-//				numRead.addAndGet(1);
-//			}
-			if (!hasIdBeenProcessed(row)) {
-				numRead.addAndGet(1);
+			if (!hasIdBeenReadFromCouch(row)) {
+				resultSize++;
 			}
 		}
+		numRead.addAndGet(resultSize);
 
 		logger.debug(String.format("migrate() spent %d millis running query to retrieve %d docs between start id %s and end id %s from couchbase",
 				System.currentTimeMillis() - startTime3,
@@ -428,9 +470,12 @@ public class Couch {
 
 		logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
 
-		processViewResults(res, mongo, id);
-		logger.debug(String.format("Thread %d finished ", id));
+		if (resultSize == 0) {
+			logger.debug(String.format("Already migrated all documents in partition range [%s,%s).", startDocumentId, endDocumentId));
+			return;
+		}
 
+		processViewResults(res, mongo, id);
 	}
 
 	/***
@@ -510,12 +555,12 @@ public class Couch {
 		return false;
 	}
 
-	private boolean hasIdBeenProcessed(ViewResult.Row row) {
+	private boolean hasIdBeenReadFromCouch(ViewResult.Row row) {
 		try {
+
 			String docStr = row.getDoc();
 			Document doc = Document.parse(docStr);
 			String docId = doc.getString("_id");
-
 
 			boolean hasBeenProcessed = false;
 			if (idProcessed.containsKey(docId)) {

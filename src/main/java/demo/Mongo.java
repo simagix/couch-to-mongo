@@ -72,8 +72,10 @@ public class Mongo implements AutoCloseable {
     public boolean mongoContainsId(String dbName, String collectionName, String id) {
         // Lazily initialize
         if (existingIds == null) {
-            logger.debug("Lazily initializing existing ids...");
-            existingIds = getExistingIds(dbName, collectionName);
+            synchronized (this) {
+                logger.debug("Lazily initializing existing ids...");
+                existingIds = getExistingIds(dbName, collectionName);
+            }
         }
         return existingIds.contains(id);
     }
@@ -434,7 +436,7 @@ public class Mongo implements AutoCloseable {
      * @param collectionName
      * @return
      */
-    private Set<String> getExistingIds(String dbName, String collectionName) {
+    public Set<String> getExistingIds(String dbName, String collectionName) {
         long startTime = System.currentTimeMillis();
 
         logger.debug(String.format("Getting existing ids in MongoDB namespace %s.%s", dbName, collectionName));
