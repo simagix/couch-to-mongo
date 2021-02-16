@@ -9,9 +9,11 @@ import org.ektorp.impl.StdCouchDbInstance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.print.Doc;
 import java.io.EOFException;
 import java.net.MalformedURLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -28,10 +30,12 @@ public class Couch {
 	private int couchBatchSize;
 	private int mongoBatchSize;
 
-
+	private AtomicLong numRead = new AtomicLong(0);
 	private AtomicLong fetched;
 	private AtomicLong shouldInsert;
 	private long initialFetchedFromMongo = 0;
+
+	private Map<String, Boolean> idProcessed;
 
 	public Couch(Properties prop) {
 		couchdbURI = prop.getProperty("couchdb.uri");
@@ -45,6 +49,8 @@ public class Couch {
 
 		fetched = new AtomicLong(0);
 		shouldInsert = new AtomicLong(0);
+
+		idProcessed = new ConcurrentHashMap<>();
 	}
 
 	/***
@@ -73,18 +79,14 @@ public class Couch {
 			// Get partitions
 			String minCouchDBKey = getMinKeyValue(couchDB);
 			String maxCouchDBKey = getMaxKeyValue(couchDB);
-			int numBatches = getNumBatches(minCouchDBKey, maxCouchDBKey, couchBatchSize);
-			SortedMap<String, KeySpacePartition> partitions = getPartitions(minCouchDBKey, maxCouchDBKey, numBatches);
-
-			// Get initial document ids from couch db
-//			ViewResult result = getInitialCouchDBDocuments(couchDB);
-//			mongo.insertMetaDataOperation("completeInitialCouchDBQuery", new Date());
+			long numBatches = getNumBatches(minCouchDBKey, maxCouchDBKey, couchBatchSize);
+			SortedMap<String, KeySpacePartition> partitions = getPartitions(minCouchDBKey, maxCouchDBKey, numBatches, couchBatchSize);
 
 			// Process the documents in our pool threads
-			long numReadFromCouch = migrateInBatches(executor, mongo, couchDB, partitions);
+			migrateInBatches(executor, mongo, couchDB, partitions);
 
 			// Wait for records to migrate
-			waitForCompletion(executor, numReadFromCouch, mongo);
+			waitForCompletion(executor, mongo);
 			mongo.insertMetaDataOperation("end", new Date());
 
 			long inMongo = mongo.countDocuments(dbName, collectionName);
@@ -121,7 +123,7 @@ public class Couch {
 		logger.info(String.format("found %d documents in CouchDB", result.getSize()));
 
 		if (result.isEmpty()) {
-			return "";
+			return "0";
 		}
 
 		for (ViewResult.Row row : result.getRows()) {
@@ -148,7 +150,7 @@ public class Couch {
 		ViewResult result = couchDB.queryView(query);
 		logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - startTime2));
 
-		logger.info(String.format("found %d documents in CouchDB", result.getSize()));
+		logger.debug(String.format("found %d documents in CouchDB", result.getSize()));
 
 		if (result.isEmpty()) {
 			return "";
@@ -167,15 +169,16 @@ public class Couch {
 	 * Calculates the number of batches given the key range and batch size
 	 *
 	 * @param minKey			A String representation of the min document id
-	 * @param maxkey			A String representation of the maximum document id
+	 * @param maxKey			A String representation of the maximum document id
 	 * @param maxBatchSize		An integer representing the max number of documents/ids per batch
 	 * @return					An integer representing the number of resulting batches needed to handle specified key-range
 	 */
-	private int getNumBatches(String minKey, String maxkey, int maxBatchSize) {
-		logger.info(String.format("Calculating number of batchs for key range [%s,%s) and max batch size of %d", minKey, maxkey, maxBatchSize));
-		Integer minKeyInt = Integer.parseInt(minKey);
-		Integer maxKeyInt = Integer.parseInt(maxkey);
-		return (int) Math.ceil((maxKeyInt - minKeyInt)/maxBatchSize);
+	private long getNumBatches(String minKey, String maxKey, int maxBatchSize) {
+		logger.info(String.format("Calculating number of batches for key range [%s,%s) and max batch size of %d", minKey, maxKey, maxBatchSize));
+		Double minKeyDbl = Double.parseDouble(minKey);
+		Double maxKeyDbl = Double.parseDouble(maxKey);
+		Double maxBatchSizeDbl = (double) maxBatchSize;
+		return (long) Math.ceil((maxKeyDbl - minKeyDbl)/maxBatchSizeDbl);
 	}
 
 	/***
@@ -189,15 +192,16 @@ public class Couch {
 	 * @param numPartitions		An integer representing the number of partitions desired
 	 * @return 					A SortedMap<String, KeySpacePartition> representing all the ordered key ranges
 	 */
-	private SortedMap<String, KeySpacePartition> getPartitions(String minKey, String maxkey, int numPartitions) {
+	private SortedMap<String, KeySpacePartition> getPartitions(String minKey, String maxkey, long numPartitions, long numKeysPerPartition) {
 		logger.info(String.format("Calculating %d partitions for range [%s,%s)",numPartitions,  minKey, maxkey));
 
 		SortedMap<String, KeySpacePartition> partitions = new TreeMap<>();
 
-		Integer minKeyInt = Integer.parseInt(minKey);
-		Integer maxKeyInt = Integer.parseInt(maxkey);
+		Double minKeyDbl = Double.parseDouble(minKey);
+		Double maxKeyDbl = Double.parseDouble(maxkey);
+		Double numPartitionsDbl = (double) numPartitions;
 
-		int maxNumKeysPerPartition = (int) Math.ceil((maxKeyInt - minKeyInt)/numPartitions);
+		long maxNumKeysPerPartition = (long) Math.ceil((maxKeyDbl - minKeyDbl)/numPartitionsDbl);
 		logger.debug("Calculated " + maxNumKeysPerPartition + " max number of keys per partitions");
 
 		// Example:
@@ -207,13 +211,15 @@ public class Couch {
 		// Partition 2: [10, 15)
 		// Partition 3: [15, 20)
 		// Partition 4: [20, 25)
-		Integer lastKeySeen = minKeyInt;
+		Long minKeyLong = Long.parseLong(minKey);
+		Long maxKeyLong = Long.parseLong(maxkey);
+		Long lastKeySeen = minKeyLong;
 		for (int i = 0; i < numPartitions; i++) {
-			Integer currentKey = lastKeySeen + maxNumKeysPerPartition;
+			Long currentKey = lastKeySeen + numKeysPerPartition;
 
 			logger.debug(String.format("Creating partition [%s,%s)", lastKeySeen.toString(), currentKey.toString()));
 			KeySpacePartition partition = new KeySpacePartition(lastKeySeen.toString(), currentKey.toString());
-			partitions.put(currentKey.toString(), partition);
+			partitions.put(lastKeySeen.toString(), partition);
 
 			lastKeySeen = currentKey;
 		}
@@ -260,13 +266,10 @@ public class Couch {
 	 * @param mongo				A Mongo object representing a MongoDB client
 	 * @param couchDB			An ektorp CouchDBConnector object representing a CouchDB client
 	 * @param partitionMap		A SortedMap<String, KeySpacePartition> repersenting a map of min key to KeySpace Partition objects
-	 * @return					A long representing the number of documents the job will migrate
 	 * @throws InterruptedException
 	 */
-	private long migrateInBatches(ThreadPoolExecutor executor, Mongo mongo, CouchDbConnector couchDB, SortedMap<String, KeySpacePartition> partitionMap) {
+	private void migrateInBatches(ThreadPoolExecutor executor, Mongo mongo, CouchDbConnector couchDB, SortedMap<String, KeySpacePartition> partitionMap) {
 		logger.info("Migrating data in batches based on partitions...");
-
-		AtomicLong numRead = new AtomicLong(0);
 
 		for (String minKey : partitionMap.keySet()) {
 
@@ -274,8 +277,7 @@ public class Couch {
 
 			logger.info(String.format("Creating migration batch for key range [%s,%s)", partition.getMinKey(), partition.getMaxKey()));
 			executor.submit(() -> {
-				int numReadFromCouch = fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
-				numRead.addAndGet(numReadFromCouch);
+				fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
 			});
 
 			while (executor.getQueue().size() > numThreads) {
@@ -287,8 +289,6 @@ public class Couch {
 				}
 			}
 		}
-
-		return numRead.get();
 	}
 
 	/***
@@ -366,16 +366,16 @@ public class Couch {
 	 * @param mongo
 	 * @throws InterruptedException
 	 */
-	private void waitForCompletion(ThreadPoolExecutor executor, long numCouchdbDocs, Mongo mongo) throws InterruptedException {
+	private void waitForCompletion(ThreadPoolExecutor executor, Mongo mongo) throws InterruptedException {
 
-		long inMongo = mongo.countDocuments(dbName, collectionName);
+		long inMongo = 0;
 
-		while (numCouchdbDocs != inMongo) {
-
-			logger.info(String.format("total of %d fetched, %d in mongo", numCouchdbDocs, inMongo));
-			Thread.sleep(5000);
+		do {
 			inMongo = mongo.countDocuments(dbName, collectionName);
-		}
+			logger.info(String.format("total of %d fetched, %d in mongo", numRead.get(), inMongo));
+			Thread.sleep(5000);
+		} while (numRead.get() > inMongo);
+
 		executor.shutdown();
 		executor.awaitTermination(5, TimeUnit.SECONDS);
 	}
@@ -390,8 +390,11 @@ public class Couch {
 	 * @param couchDB					A CouchDBConnector instance
 	 * @param mongo						A Mongo instance
 	 */
-	private int fetchFromCouchDBAndMigrate(String startDocumentId, String endDocumentId, CouchDbConnector couchDB, Mongo mongo) {
-		logger.info("Fetching data from CouchDB and migrating");
+	private void fetchFromCouchDBAndMigrate(String startDocumentId, String endDocumentId, CouchDbConnector couchDB, Mongo mongo) {
+		long id = Thread.currentThread().getId() % numThreads;
+		logger.debug(String.format("Starting thread with id %d", id));
+
+		logger.debug("Fetching data from CouchDB and migrating");
 
 		// Record
 		long startTime3 = System.currentTimeMillis();
@@ -401,6 +404,19 @@ public class Couch {
 				.inclusiveEnd(false);
 		ViewResult res = couchDB.queryView(q);
 		int resultSize = res.getSize();
+
+		// TODO remove
+//		Long startDocumentIdLong = Long.parseLong(startDocumentId);
+//		Long endDocumentIdLong = Long.parseLong(endDocumentId);
+		for (ViewResult.Row row : res.getRows()) {
+//			if (!isDocumentOutsideRange(row, startDocumentIdLong, endDocumentIdLong)) {
+//				numRead.addAndGet(1);
+//			}
+			if (!hasIdBeenProcessed(row)) {
+				numRead.addAndGet(1);
+			}
+		}
+
 		logger.debug(String.format("migrate() spent %d millis running query to retrieve %d docs between start id %s and end id %s from couchbase",
 				System.currentTimeMillis() - startTime3,
 				resultSize,
@@ -412,13 +428,9 @@ public class Couch {
 
 		logger.debug(String.format("migrate() spent %d millis tabulating couchbase result size", System.currentTimeMillis() - startTime3));
 
-		long id = Thread.currentThread().getId() % numThreads;
-		logger.info(String.format("Starting thread with id %d", id));
-
 		processViewResults(res, mongo, id);
-		logger.info(String.format("Thread %d finished ", id));
+		logger.debug(String.format("Thread %d finished ", id));
 
-		return resultSize;
 	}
 
 	/***
@@ -431,7 +443,7 @@ public class Couch {
 	 * @param mongo             A Mongo object representing a MongoDB client
 	 * @param id                The thread id, or other id used for logging and auditing
 	 */
-	private int processViewResults(ViewResult result, Mongo mongo, long id) {
+	private void processViewResults(ViewResult result, Mongo mongo, long id) {
 		logger.debug(String.format("Started processViewResults on thread %d and %d results", id, result.getSize()));
 
 		long startTime = System.currentTimeMillis();
@@ -439,6 +451,7 @@ public class Couch {
 		List<Document> documents = new ArrayList<>();
 		int numShouldMigrate = 0;
 		for (ViewResult.Row row : result.getRows()) {
+
 			if (mongo.mongoContainsId(dbName, collectionName, row.getId())) {
 				logger.debug(String.format("Id %s already been migrated to MongoDB. Not processing the document from Couch DB...", row.getId()));
 				continue;
@@ -468,8 +481,61 @@ public class Couch {
 		// Record time
 		long endTime = System.currentTimeMillis();
 		logger.debug(String.format("processViewResults() on id %d lasted %d mills", id, endTime - startTime));
-		return numShouldMigrate;
 	}
+
+	/**
+	 * Is Document Outside Range
+	 *
+	 * Checks if a document's _id field (which is a numerical data represented as a String) is numerically outside the specified range
+	 *
+	 * @param row						An ektorp client ViewResult.Row object, representing a row in a CouchDB result set
+	 * @param startDocumentIdLong		A Long representing the start document _id value to use as the start of the range
+	 * @param endDocumentIdLong			A Long representing the end document_id value to use as the end of the range
+	 * @return							true if the row's _id value is outside of [startDocumentIdLong, endDocumentIdLong),
+	 * 									false otherwise
+	 */
+	private boolean isDocumentOutsideRange(ViewResult.Row row, Long startDocumentIdLong, Long endDocumentIdLong) {
+		try {
+			String docStr = row.getDoc();
+			Document doc = Document.parse(docStr);
+			String docId = doc.getString("_id");
+
+			Long docIdLong = Long.parseLong(docId);
+
+			return docIdLong >= endDocumentIdLong || docIdLong < startDocumentIdLong;
+
+		} catch (Exception ex) {
+			logger.error("Encountered exception: " + ex);
+		}
+		return false;
+	}
+
+	private boolean hasIdBeenProcessed(ViewResult.Row row) {
+		try {
+			String docStr = row.getDoc();
+			Document doc = Document.parse(docStr);
+			String docId = doc.getString("_id");
+
+
+			boolean hasBeenProcessed = false;
+			if (idProcessed.containsKey(docId)) {
+				hasBeenProcessed = idProcessed.get(docId);
+			}
+
+			if (!hasBeenProcessed) {
+				idProcessed.put(docId, true);
+			}
+			return hasBeenProcessed;
+
+		} catch (Exception ex) {
+			logger.error("Encountered exception: " + ex);
+		}
+		return false;
+	}
+
+//	private void logMessageToMongo(Mongo mongo, Document message, Date date) {
+//		mongo.insertMetaDataOperation();
+//	}
 
 	/***
 	 * KeySpace Partition

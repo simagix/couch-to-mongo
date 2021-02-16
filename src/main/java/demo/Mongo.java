@@ -92,7 +92,7 @@ public class Mongo implements AutoCloseable {
     public int updateDocsInMongo(String dbName, String collectionName, Set<Document> documents,  Long threadId) {
         long startTime = System.currentTimeMillis();
 
-        logger.info("Updating documents in mongo");
+        logger.debug("Updating documents in mongo");
         if (documents.isEmpty()) {
             logger.debug("Result set provided is empty. Not inserting.");
             return 0;
@@ -121,11 +121,11 @@ public class Mongo implements AutoCloseable {
             logger.trace(String.format("Making update attempt %d/%d", numUpdateAttempts, MAX_NUM_INSERT_ATTEMPTS));
             try {
                 String message = String.format("documents size %d", updates.size());
-                logger.info(message);
+                logger.debug(message);
 
                 BulkWriteResult result = collection.bulkWrite(updates, options);
                 resultSize = result.getModifiedCount() + result.getInsertedCount();
-                logger.info(String.format("Successfully matched %d documents, updated %d documents, and upserted %d documents",
+                logger.debug(String.format("Successfully matched %d documents, updated %d documents, and upserted %d documents",
                                             result.getModifiedCount(), result.getModifiedCount(), result.getInsertedCount()));
 
                 if (resultSize > 0) {
@@ -166,7 +166,7 @@ public class Mongo implements AutoCloseable {
 	public int saveToMongo(String dbName, String collectionName, List<Document> documents, Long threadId) {
         long startTime = System.currentTimeMillis();
 
-        logger.info("Saving data to mongo");
+        logger.debug("Saving data to mongo");
 
 		if (documents.isEmpty()) {
 		    logger.trace("Result set provided is empty. Not inserting.");
@@ -187,11 +187,11 @@ public class Mongo implements AutoCloseable {
             logger.trace(String.format("Making write attempt %d/%d", numInsertAttempts, MAX_NUM_INSERT_ATTEMPTS));
             try {
                 String message = String.format("documents size %d", documents.size());
-                logger.info(message);
+                logger.debug(message);
 
                 InsertManyResult res = collection.insertMany(documents, options);
                 resultSize = res.getInsertedIds().size();
-                logger.info(String.format("Successfully inserted %d documents", resultSize));
+                logger.debug(String.format("Successfully inserted %d documents", resultSize));
 
                 if (resultSize > 0) {
                     insertMetaData(dbName, threadId, res, docIdToSeqNum);
@@ -244,13 +244,13 @@ public class Mongo implements AutoCloseable {
                 break;
             } catch (MongoException ex) {
                 logger.error("Encountered MongoBulkWriteException: " + ex);
-                logger.info(ex.getMessage());
+                logger.error(ex.getMessage());
                 sleep(2000);
                 continue;
             } catch (Exception ex) {
 
                 logger.error("Encountered exception: " + ex);
-                logger.info(ex.getMessage());
+                logger.error(ex.getMessage());
                 break;
             }
         }
@@ -293,7 +293,7 @@ public class Mongo implements AutoCloseable {
      */
     public void insertLastSequenceNumber(String lastSequenceNumber, Date date) {
         if (lastSequenceNumber == null) {
-            logger.info("Received null lastSequenceNumber; cannot proceed to log this.");
+            logger.debug("Received null lastSequenceNumber; cannot proceed to log this.");
             return;
         }
 
@@ -344,7 +344,7 @@ public class Mongo implements AutoCloseable {
      * @return              A Map<String, String> representing the DocumentSequenceNumber for each document inserted
      */
     private Map<String, String> getDocumentSequenceNums(Collection<Document> documents) {
-        logger.info("Getting document sequence numbers");
+        logger.debug("Getting document sequence numbers");
         Map<String, String> docIdToSeqNum = new HashMap<>();
 
         try {
@@ -437,7 +437,7 @@ public class Mongo implements AutoCloseable {
     private Set<String> getExistingIds(String dbName, String collectionName) {
         long startTime = System.currentTimeMillis();
 
-        logger.info(String.format("Getting existing ids in MongoDB namespace %s.%s", dbName, collectionName));
+        logger.debug(String.format("Getting existing ids in MongoDB namespace %s.%s", dbName, collectionName));
         Set<String> ids = new HashSet<>();
 
         MongoCollection<Document> collection = mongoClient.getDatabase(dbName).getCollection(collectionName);
