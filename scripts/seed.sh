@@ -6,11 +6,14 @@ if [ "$1" != "" ]; then
 fi
 
 curl -H 'Content-Type: application/json' \
-    -X DELETE http://user:password@127.0.0.1:5984/$db
+    -X DELETE http://testuser:testpass@127.0.0.1:5984/$db
 curl -H 'Content-Type: application/json' \
-    -X PUT http://user:password@127.0.0.1:5984/$db
+    -X PUT http://testuser:testpass@127.0.0.1:5984/$db
 
-blah='"Analytics": {
+blah='"Header" : {
+    "DocumentSequenceNumber" : 5555
+  },
+  "Analytics": {
   "annotations": {
     "list": [
       {
@@ -2669,7 +2672,7 @@ do
         docs=$docs${mesg}','"${blah}"'},'
     done
     docs=${docs::${#docs}-1}']}'
-    curl -X POST -H "Content-Type: application/json" http://user:password@127.0.0.1:5984/$db/_bulk_docs -d "${docs}" > /dev/null 2>&1 &
+    curl -X POST -H "Content-Type: application/json" http://testuser:testpass@127.0.0.1:5984/$db/_bulk_docs -d "${docs}" > /dev/null 2>&1 &
 done
 
 for job in `jobs -p`

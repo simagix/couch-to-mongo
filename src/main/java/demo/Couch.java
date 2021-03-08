@@ -70,7 +70,6 @@ public class Couch {
 		CouchDbInstance dbInstance = new StdCouchDbInstance(httpClient);
 		CouchDbConnector couchDB = dbInstance.createConnector(dbName, true);
 
-
 		Mongo mongo = new Mongo(mongodbURI, dbName);
 		try (mongo) {
 			long count = mongo.countDocuments(dbName, collectionName);
