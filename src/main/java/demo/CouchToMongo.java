@@ -21,15 +21,24 @@ public class CouchToMongo {
 
 		logger.info("Found args :" + Arrays.toString(args));
 
+		String filename = "migration.properties";
+		String lastSequenceNum = null;
 		try {
-			String filename = "migration.properties";
 			if (args.length > 0) {
 				filename = args[0];
+				lastSequenceNum = args[1];
 				logger.info("Setting filename to " + filename);
 			}
-			new demo.Couch(readProperties(filename)).migrate();
 		} catch (Exception e) {
 			e.printStackTrace();
+		} finally {
+
+			// Run migration
+			try {
+				new demo.Couch(readProperties(filename)).migrate(lastSequenceNum);
+			} catch (Exception ex) {
+				ex.printStackTrace();
+			}
 		}
 	}
 
