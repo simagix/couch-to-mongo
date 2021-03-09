@@ -263,7 +263,7 @@ public class Mongo implements AutoCloseable {
             numReadAttempts++;
             logger.trace(String.format("Making count attempt %d/%d", numReadAttempts, MAX_NUM_READ_ATTEMPTS));
             try {
-                numDocs = collection.countDocuments();
+                numDocs = collection.estimatedDocumentCount();
                 break;
             } catch (MongoException ex) {
                 logger.error("Encountered MongoBulkWriteException: " + ex);
@@ -385,12 +385,14 @@ public class Mongo implements AutoCloseable {
                     documentSeqNum = docSeqNum.toString();
 
                 } catch (Exception ex) {
-                    logger.debug(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
+                    logger.error(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
                     documentSeqNum = "";
+                    logger.error("Nested document HEADER was null", ex);
+                    ex.printStackTrace();
                 }
 
                 docIdToSeqNum.put(id, documentSeqNum);
-                logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
+                logger.debug(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
             }
         } catch (Exception ex) {
             logger.error("Encountered error when attempting to fetch ids for documents: " + ex.getMessage(), ex);
