@@ -1,27 +1,25 @@
 package demo;
 
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
 import org.bson.Document;
 import org.ektorp.CouchDbConnector;
 import org.ektorp.ViewQuery;
 import org.ektorp.ViewResult;
 import org.ektorp.changes.ChangesCommand;
-import org.ektorp.changes.ChangesFeed;
 import org.ektorp.changes.DocumentChange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.SpringApplication;
-
-import javax.print.Doc;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.*;
 
 public class ChangeFeedClient {
 
     private static Logger logger = LoggerFactory.getLogger(ChangeFeedClient.class);
 
-    private final String NO_SEQUENCE_NUMBER_FOUND = "NO_SEQUENCE_NUMBER_FOUND";
+    public static final String NO_SEQUENCE_NUMBER_FOUND = "NO_SEQUENCE_NUMBER_FOUND";
     private final int BATCH_SIZE = 100;
 
     private UUID sessionId;
@@ -129,13 +127,16 @@ public class ChangeFeedClient {
     }
 
     private Set<String> getChangeIdsFromChangeFeed() {
+        Set<String> changedIds = new HashSet<>();
+        if(NO_SEQUENCE_NUMBER_FOUND.equals(lastSequenceNumber)) {
+            return changedIds;
+        }
         ChangesCommand changesCommand = new ChangesCommand.Builder().since(lastSequenceNumber)
                 .includeDocs(true)
                 .build();
         List<DocumentChange> changeFeed = couchDB.changes(changesCommand);
 
         // Coalesce updates per document via a map
-        Set<String> changedIds = new HashSet<>();
         for (DocumentChange change : changeFeed) {
 
             String docId = change.getId();
@@ -176,23 +177,6 @@ public class ChangeFeedClient {
         }
 
         logger.debug("Could not find any sequence number for this document change");
-        return NO_SEQUENCE_NUMBER_FOUND;
+        return null;
     }
-
-//    public static void main(String[] args) {
-//        SpringApplication.run(CouchToMongo.class, args);
-//
-//        logger.info("Found args :" + Arrays.toString(args));
-//
-//        try {
-//            String filename = "migration.properties";
-//            if (args.length > 0) {
-//                filename = args[0];
-//                logger.info("Setting filename to " + filename);
-//            }
-//            new demo.Couch(readProperties(filename)).migrate();
-//        } catch (Exception e) {
-//            e.printStackTrace();
-//        }
-//    }
 }

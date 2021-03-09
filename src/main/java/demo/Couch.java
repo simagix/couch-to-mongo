@@ -1,23 +1,33 @@
 // Copyright 2020 Kuei-chun Chen. All rights reserved.
 package demo;
 
-import org.bson.Document;
-import org.ektorp.*;
-import org.ektorp.http.HttpClient;
-import org.ektorp.http.StdHttpClient;
-import org.ektorp.impl.StdCouchDbInstance;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.print.Doc;
 import java.io.EOFException;
 import java.net.MalformedURLException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.bson.Document;
+import org.ektorp.CouchDbConnector;
+import org.ektorp.CouchDbInstance;
+import org.ektorp.ViewQuery;
+import org.ektorp.ViewResult;
+import org.ektorp.http.HttpClient;
+import org.ektorp.http.StdHttpClient;
+import org.ektorp.impl.StdCouchDbInstance;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class Couch {
 	private Logger logger = LoggerFactory.getLogger(Couch.class);
@@ -78,10 +88,11 @@ public class Couch {
 //			getSetDifference(couchDB, mongo, dbName, collectionName);
 
 			// Get partitions
-			String minCouchDBKey = getMinKeyValue(couchDB);
-			String maxCouchDBKey = getMaxKeyValue(couchDB);
-			long numBatches = getNumBatches(minCouchDBKey, maxCouchDBKey, couchBatchSize);
-			SortedMap<String, KeySpacePartition> partitions = getPartitions(minCouchDBKey, maxCouchDBKey, numBatches, couchBatchSize);
+			// String minCouchDBKey = getMinKeyValue(couchDB);
+			// String maxCouchDBKey = getMaxKeyValue(couchDB);
+			// long numBatches = getNumBatches(minCouchDBKey, maxCouchDBKey, couchBatchSize);
+			// SortedMap<String, KeySpacePartition> partitions = getPartitions(minCouchDBKey, maxCouchDBKey, numBatches, couchBatchSize);
+			SortedMap<String, KeySpacePartition> partitions = getPartitions(couchDB, couchBatchSize);
 
 			// Process the documents in our pool threads
 			migrateInBatches(executor, mongo, couchDB, partitions);
@@ -100,6 +111,38 @@ public class Couch {
 		} catch (Exception ex) {
 			ex.printStackTrace();
 		}
+	}
+
+	private SortedMap<String, KeySpacePartition> getPartitions(CouchDbConnector couchDB, int couchBatchSize) {
+		logger.info("Calculating partitions with batch size of " + couchBatchSize);
+		SortedMap<String, KeySpacePartition> partitions = new TreeMap<>();
+		long t = System.currentTimeMillis();
+		ViewQuery query = new ViewQuery().allDocs().includeDocs(false).limit(1);
+		ViewResult result = couchDB.queryView(query);
+		logger.debug(String.format("migrate() spent %d mills while running initial query", System.currentTimeMillis() - t));
+		if (result.isEmpty()) {
+			return partitions;
+		}
+		String minKeyValue = result.getRows().get(0).getId();
+		String maxKeyValue = "";
+		logger.info("have minKeyValue: "+ minKeyValue);
+		while(true) {
+			ViewQuery q = new ViewQuery().allDocs().includeDocs(false).startDocId(minKeyValue).limit(couchBatchSize);
+			ViewResult res = couchDB.queryView(q);
+			if(res.isEmpty()) {
+				break;
+			}
+			int size = res.getSize();
+			maxKeyValue = res.getRows().get(size-1).getId();
+			logger.debug(String.format("partition (%s, %s), size: %d", minKeyValue, maxKeyValue, size));
+			KeySpacePartition partition = new KeySpacePartition(minKeyValue, maxKeyValue);
+			partitions.put(minKeyValue+"-"+maxKeyValue, partition);
+			if(minKeyValue.equals(maxKeyValue)) {
+				break;
+			}
+			minKeyValue = maxKeyValue;
+		}
+		return partitions;
 	}
 
 	/***
@@ -314,12 +357,11 @@ public class Couch {
 	 */
 	private void migrateInBatches(ThreadPoolExecutor executor, Mongo mongo, CouchDbConnector couchDB, SortedMap<String, KeySpacePartition> partitionMap) {
 		logger.info("Migrating data in batches based on partitions...");
-
 		for (String minKey : partitionMap.keySet()) {
 
 			KeySpacePartition partition = partitionMap.get(minKey);
 
-			logger.info(String.format("Creating migration batch for key range [%s,%s)", partition.getMinKey(), partition.getMaxKey()));
+			logger.info(String.format("Creating migration batch for key range (%s,%s)", partition.getMinKey(), partition.getMaxKey()));
 			executor.submit(() -> {
 				long id = Thread.currentThread().getId() % numThreads;
 				logger.debug(String.format("Starting thread with id %d", id));
@@ -445,8 +487,8 @@ public class Couch {
 		long startTime3 = System.currentTimeMillis();
 
 		// Get documents from Couch DB
-		ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId)
-				.inclusiveEnd(false);
+		boolean incluseive = (startDocumentId.equals(endDocumentId));
+		ViewQuery q = new ViewQuery().allDocs().includeDocs(true).startDocId(startDocumentId).endDocId(endDocumentId).inclusiveEnd(incluseive);
 		ViewResult res = couchDB.queryView(q);
 
 		// Do not double-count rows
@@ -488,7 +530,7 @@ public class Couch {
 	 * @param id                The thread id, or other id used for logging and auditing
 	 */
 	private void processViewResults(ViewResult result, Mongo mongo, long id) {
-		logger.debug(String.format("Started processViewResults on thread %d and %d results", id, result.getSize()));
+		logger.info(String.format("Started processViewResults on thread %d and %d results", id, result.getSize()));
 
 		long startTime = System.currentTimeMillis();
 

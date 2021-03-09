@@ -1,22 +1,43 @@
 // Copyright 2020 Kuei-chun Chen. All rights reserved.
 package demo;
 
-import com.mongodb.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoException;
+import com.mongodb.MongoWriteException;
+import com.mongodb.WriteConcern;
 import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.bulk.BulkWriteInsert;
 import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
-import com.mongodb.client.*;
-import com.mongodb.client.model.*;
+import com.mongodb.client.AggregateIterable;
+import com.mongodb.client.FindIterable;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.BulkWriteOptions;
+import com.mongodb.client.model.InsertManyOptions;
+import com.mongodb.client.model.UpdateOneModel;
+import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.result.InsertManyResult;
 import com.mongodb.client.result.UpdateResult;
+
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.*;
 
 public class Mongo implements AutoCloseable {
     private Logger logger = LoggerFactory.getLogger(Mongo.class);
@@ -334,7 +355,7 @@ public class Mongo implements AutoCloseable {
             String sequenceNumber = document.getString("lastSequenceNumber");
             return sequenceNumber;
         }
-        return "NO_SEQUENCE_NUMBER_FOUND";
+        return ChangeFeedClient.NO_SEQUENCE_NUMBER_FOUND;
     }
 
     /***
