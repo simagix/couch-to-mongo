@@ -204,8 +204,10 @@ public class Mongo implements AutoCloseable {
 
         int resultSize = 0;
 		int numInsertAttempts = 0;
+        boolean inserted = true;
 
 		while (numInsertAttempts < MAX_NUM_INSERT_ATTEMPTS) {
+            inserted = false;
             numInsertAttempts++;
             logger.trace(String.format("Making write attempt %d/%d", numInsertAttempts, MAX_NUM_INSERT_ATTEMPTS));
             try {
@@ -217,6 +219,7 @@ public class Mongo implements AutoCloseable {
                 logger.debug(String.format("Successfully inserted %d documents", resultSize));
 
                 if (resultSize > 0) {
+                    inserted = true;
                     insertMetaData(dbName, threadId, res, docIdToSeqNum);
                     break;
                 }
@@ -244,6 +247,17 @@ public class Mongo implements AutoCloseable {
             }
         }
 
+        if (! inserted ) {
+            if(documents.size() > 1) {
+                for(Document doc : documents) {
+                    List<Document> single = new ArrayList<Document>(1);
+                    single.add(doc);
+                    saveToMongo(dbName, collectionName, single, threadId);
+                }
+            } else if(documents.size() == 1) {
+                logger.error("insert failed _id " + documents.get(0).getString("_id"));
+            }
+        }
         // Record time
         long endTime = System.currentTimeMillis();
         logger.debug(String.format("saveToMongo() lasted %d mills", endTime - startTime));
@@ -385,14 +399,12 @@ public class Mongo implements AutoCloseable {
                     documentSeqNum = docSeqNum.toString();
 
                 } catch (Exception ex) {
-                    logger.error(String.format("Nested document HEADER was null. Inserting document sequence number %s for id %s", "", id));
+                    logger.debug(String.format("Nested document HEADER was null, id: %s", id));
                     documentSeqNum = "";
-                    logger.error("Nested document HEADER was null", ex);
-                    ex.printStackTrace();
                 }
 
                 docIdToSeqNum.put(id, documentSeqNum);
-                logger.debug(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
+                logger.trace(String.format("Inserting document sequence number %s for id %s", documentSeqNum, id));
             }
         } catch (Exception ex) {
             logger.error("Encountered error when attempting to fetch ids for documents: " + ex.getMessage(), ex);

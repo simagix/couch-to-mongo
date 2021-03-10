@@ -137,11 +137,15 @@ public class Couch {
 			logger.debug(String.format("partition (%s, %s), size: %d", minKeyValue, maxKeyValue, size));
 			KeySpacePartition partition = new KeySpacePartition(minKeyValue, maxKeyValue);
 			partitions.put(minKeyValue+"-"+maxKeyValue, partition);
+			if(partitions.size()%100 == 0) {
+				logger.info(String.format("partitions created %d", partitions.size()));
+			}
 			if(minKeyValue.equals(maxKeyValue)) {
 				break;
 			}
 			minKeyValue = maxKeyValue;
 		}
+		logger.info(String.format("total partitions created %d", partitions.size()));
 		return partitions;
 	}
 
@@ -461,10 +465,14 @@ public class Couch {
 
 		do {
 			inMongo = mongo.countDocuments(dbName, collectionName);
+			logger.info(String.format("%d threads active, %d tasks queued", executor.getActiveCount(), executor.getQueue().size()));
 			logger.info(String.format("total of %d fetched, %d in mongo", numRead.get(), inMongo));
 			Thread.sleep(5000);
-		} while (numRead.get() > inMongo);
+		} while (executor.getActiveCount() > 0 || executor.getQueue().size() > 0);
 
+		inMongo = mongo.countDocuments(dbName, collectionName);
+		logger.info(String.format("total of %d fetched, %d in mongo", numRead.get(), inMongo));
+		logger.info("shutdown thread executor");
 		executor.shutdown();
 		executor.awaitTermination(5, TimeUnit.SECONDS);
 	}
