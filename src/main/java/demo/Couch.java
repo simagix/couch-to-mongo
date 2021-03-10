@@ -371,10 +371,10 @@ public class Couch {
 				}
 			});
 
-			while (executor.getQueue().size() > 100) {
+			while (executor.getQueue().size() > numThreads) {
 				logger.debug(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
 				try {
-					Thread.sleep(1000);    // throttle and yield
+					Thread.sleep(5000);    // throttle and yield
 				} catch (InterruptedException ex) {
 					logger.error("Encountered an exception when attempting to sleep: " + ex);
 				}
