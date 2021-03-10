@@ -256,6 +256,7 @@ public class Mongo implements AutoCloseable {
                 }
             } else if(documents.size() == 1) {
                 logger.error("insert failed _id " + documents.get(0).getString("_id"));
+                logger.error(documents.get(0).toJson());
             }
         }
         // Record time
