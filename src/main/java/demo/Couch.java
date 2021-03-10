@@ -39,11 +39,12 @@ public class Couch {
 	private int numThreads;
 	private int couchBatchSize;
 	private int mongoBatchSize;
-
+	
+	private SortedMap<String, KeySpacePartition> partitions;
 	private AtomicLong numRead = new AtomicLong(0);
+	private AtomicLong numProcessed = new AtomicLong(0);
 	private AtomicLong fetched;
 	private AtomicLong shouldInsert;
-	private long initialFetchedFromMongo = 0;
 
 	private Map<String, Boolean> idProcessed;
 
@@ -82,17 +83,8 @@ public class Couch {
 
 		Mongo mongo = new Mongo(mongodbURI, dbName);
 		try (mongo) {
-			long count = mongo.countDocuments(dbName, collectionName);
-			initialFetchedFromMongo = count;
-
-//			getSetDifference(couchDB, mongo, dbName, collectionName);
-
 			// Get partitions
-			// String minCouchDBKey = getMinKeyValue(couchDB);
-			// String maxCouchDBKey = getMaxKeyValue(couchDB);
-			// long numBatches = getNumBatches(minCouchDBKey, maxCouchDBKey, couchBatchSize);
-			// SortedMap<String, KeySpacePartition> partitions = getPartitions(minCouchDBKey, maxCouchDBKey, numBatches, couchBatchSize);
-			SortedMap<String, KeySpacePartition> partitions = getPartitions(couchDB, couchBatchSize);
+			partitions = getPartitions(couchDB, couchBatchSize);
 
 			// Process the documents in our pool threads
 			migrateInBatches(executor, mongo, couchDB, partitions);
@@ -367,16 +359,22 @@ public class Couch {
 
 			logger.info(String.format("Creating migration batch for key range (%s,%s)", partition.getMinKey(), partition.getMaxKey()));
 			executor.submit(() -> {
-				long id = Thread.currentThread().getId() % numThreads;
-				logger.debug(String.format("Starting thread with id %d", id));
-				fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
-				logger.debug(String.format("Thread %d finished ", id));
+				try {
+					long id = Thread.currentThread().getId() % numThreads;
+					logger.debug(String.format("Starting thread with id %d", id));
+					fetchFromCouchDBAndMigrate(partition.getMinKey(), partition.getMaxKey(), couchDB, mongo);
+					logger.debug(String.format("Thread %d finished ", id));
+				} catch(Exception ex) {
+					logger.error("fetchFromCouchDBAndMigrate: " + ex);
+				} finally {
+					numProcessed.addAndGet(1);
+				}
 			});
 
-			while (executor.getQueue().size() > numThreads) {
-				logger.info(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
+			while (executor.getQueue().size() > 100) {
+				logger.debug(String.format("thread has %d jobs in queue, throttling", executor.getQueue().size()));
 				try {
-					Thread.sleep(5000);    // throttle and yield
+					Thread.sleep(1000);    // throttle and yield
 				} catch (InterruptedException ex) {
 					logger.error("Encountered an exception when attempting to sleep: " + ex);
 				}
@@ -465,11 +463,13 @@ public class Couch {
 
 		do {
 			inMongo = mongo.countDocuments(dbName, collectionName);
-			logger.info(String.format("%d threads active, %d tasks queued", executor.getActiveCount(), executor.getQueue().size()));
+			logger.info(String.format("%d threads active, %d tasks queued, %d of %d processed", 
+				executor.getActiveCount(), executor.getQueue().size(), numProcessed.get(), partitions.size()));
 			logger.info(String.format("total of %d fetched, %d in mongo", numRead.get(), inMongo));
 			Thread.sleep(5000);
-		} while (executor.getActiveCount() > 0 || executor.getQueue().size() > 0);
+		} while (numProcessed.get() < partitions.size());
 
+		logger.info(String.format("%d of %d processed", numProcessed.get(), partitions.size()));
 		inMongo = mongo.countDocuments(dbName, collectionName);
 		logger.info(String.format("total of %d fetched, %d in mongo", numRead.get(), inMongo));
 		logger.info("shutdown thread executor");
@@ -556,7 +556,7 @@ public class Couch {
 			if ((++numShouldMigrate) % mongoBatchSize == 0) {
 				int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents, id);
 				String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
-				logger.info(message);
+				logger.debug(message);
 
 				shouldInsert.addAndGet(saved);
 				documents = new ArrayList<>();
@@ -565,7 +565,7 @@ public class Couch {
 		if (!documents.isEmpty()) {
 			int saved = mongo.saveToMongo(this.dbName, this.collectionName, documents, id);
 			String message = String.format("[%d] %d sent, %d inserted to mongo", id, documents.size(), saved);
-			logger.info(message);
+			logger.debug(message);
 
 			shouldInsert.addAndGet(saved);
 		}

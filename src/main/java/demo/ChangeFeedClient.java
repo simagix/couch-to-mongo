@@ -134,22 +134,25 @@ public class ChangeFeedClient {
         ChangesCommand changesCommand = new ChangesCommand.Builder().since(lastSequenceNumber)
                 .includeDocs(true)
                 .build();
-        List<DocumentChange> changeFeed = couchDB.changes(changesCommand);
-
-        // Coalesce updates per document via a map
-        for (DocumentChange change : changeFeed) {
-
-            String docId = change.getId();
-
-            String sequenceNum = getSequenceNumber(change);
-            if (NO_SEQUENCE_NUMBER_FOUND.equals(sequenceNum)) {
-                logger.error("Could not find a sequence number for document with id " + docId);
-                continue;
+        try {
+            List<DocumentChange> changeFeed = couchDB.changes(changesCommand);
+            // Coalesce updates per document via a map
+            for (DocumentChange change : changeFeed) {
+    
+                String docId = change.getId();
+    
+                String sequenceNum = getSequenceNumber(change);
+                if (NO_SEQUENCE_NUMBER_FOUND.equals(sequenceNum)) {
+                    logger.error("Could not find a sequence number for document with id " + docId);
+                    continue;
+                }
+                lastSequenceNumber = sequenceNum.replace("\"","");
+    
+                logger.debug("Adding change for id " + docId);
+                changedIds.add(docId);
             }
-            lastSequenceNumber = sequenceNum.replace("\"","");
-
-            logger.debug("Adding change for id " + docId);
-            changedIds.add(docId);
+        } catch(Exception ex) {
+            logger.error("encountered exception", ex);
         }
         return changedIds;
     }

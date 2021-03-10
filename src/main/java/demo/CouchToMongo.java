@@ -26,19 +26,14 @@ public class CouchToMongo {
 		try {
 			if (args.length > 0) {
 				filename = args[0];
-				lastSequenceNum = args[1];
+				if (args.length > 1) {
+					lastSequenceNum = args[1];
+				}
 				logger.info("Setting filename to " + filename);
 			}
+			new demo.Couch(readProperties(filename)).migrate(lastSequenceNum);
 		} catch (Exception e) {
 			e.printStackTrace();
-		} finally {
-
-			// Run migration
-			try {
-				new demo.Couch(readProperties(filename)).migrate(lastSequenceNum);
-			} catch (Exception ex) {
-				ex.printStackTrace();
-			}
 		}
 	}
 
