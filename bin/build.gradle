@@ -1,0 +1,48 @@
+plugins {
+	id 'org.springframework.boot' version '2.4.2'
+	id 'io.spring.dependency-management' version '1.0.11.RELEASE'
+	id 'application'
+	id 'java'
+}
+
+group = 'demo'
+version = '0.1.0'
+sourceCompatibility = '11'
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter'
+	implementation 'org.springframework.boot:spring-boot-starter-logging:2.4.2'
+	implementation 'org.ektorp:org.ektorp:1.3.0'
+	implementation 'org.mongodb:mongodb-driver-sync:4.1.1'
+	implementation 'org.json:json:20201115'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+// test {
+// 	useJUnitPlatform()
+// }
+
+mainClassName = "demo.CouchToMongo"
+
+jar {
+  manifest { 
+    attributes "Main-Class": "$mainClassName"
+  }  
+
+  from {
+    configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+  }
+}
+
+task fatJar(type: Jar) {
+    manifest {
+        attributes "Main-Class": "$mainClassName"
+    }
+    baseName = 'couch-to-mongo'
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}
